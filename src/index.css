@@ -1,61 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Financial Calculator Design System - Professional & Minimalist */
+/* Professional Financial Tool Design System */
 
 @layer base {
   :root {
-    /* Core backgrounds - clean whites and subtle grays */
-    --background: 210 20% 98%;
-    --foreground: 222 47% 11%;
+    /* Core backgrounds - warm neutral */
+    --background: 220 14% 96%;
+    --foreground: 220 20% 14%;
 
-    /* Card surfaces with subtle warmth */
+    /* Card surfaces - clean white */
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 220 20% 14%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 220 20% 14%;
 
-    /* Primary - Professional blue */
-    --primary: 217 91% 50%;
+    /* Primary - Muted professional blue */
+    --primary: 215 50% 45%;
     --primary-foreground: 0 0% 100%;
 
     /* Secondary - Soft neutral */
-    --secondary: 215 20% 95%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 220 20% 25%;
 
     /* Muted - For subtle text and backgrounds */
-    --muted: 215 20% 94%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 220 14% 92%;
+    --muted-foreground: 220 10% 50%;
 
     /* Accent - Highlight interactions */
-    --accent: 217 91% 97%;
-    --accent-foreground: 217 91% 40%;
+    --accent: 215 50% 96%;
+    --accent-foreground: 215 50% 35%;
 
-    /* Destructive - For negative values/errors */
-    --destructive: 0 72% 51%;
+    /* Destructive - Soft red for negative values */
+    --destructive: 0 55% 50%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Success - For positive values */
-    --success: 142 71% 45%;
+    /* Success - Soft green for positive values */
+    --success: 152 45% 42%;
     --success-foreground: 0 0% 100%;
 
-    /* Warning - Caution states */
-    --warning: 38 92% 50%;
+    /* Warning - Soft amber */
+    --warning: 38 70% 50%;
     --warning-foreground: 0 0% 100%;
 
     /* Border and inputs */
-    --border: 215 20% 90%;
-    --input: 215 20% 90%;
-    --ring: 217 91% 50%;
+    --border: 220 14% 88%;
+    --input: 220 14% 88%;
+    --ring: 215 50% 45%;
 
-    --radius: 0.5rem;
+    --radius: 0.625rem;
 
     /* Table specific */
-    --table-header: 215 20% 97%;
-    --table-row-hover: 217 91% 98%;
-    --table-border: 215 20% 92%;
+    --table-header: 220 14% 97%;
+    --table-row-hover: 215 50% 98%;
+    --table-border: 220 14% 90%;
 
     /* Sidebar */
     --sidebar-background: 0 0% 98%;
@@ -65,44 +67,44 @@
     --sidebar-accent: 240 4.8% 95.9%;
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 215 50% 45%;
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 47% 8%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 32% 17%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 32% 17%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 217 32% 17%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62% 40%;
-    --destructive-foreground: 210 40% 98%;
-    --success: 142 71% 35%;
-    --success-foreground: 210 40% 98%;
-    --warning: 38 92% 40%;
-    --warning-foreground: 210 40% 98%;
-    --border: 217 32% 17%;
-    --input: 217 32% 17%;
-    --ring: 212.7 26.8% 83.9%;
-    --table-header: 222 47% 10%;
-    --table-row-hover: 222 47% 12%;
-    --table-border: 217 32% 20%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    --background: 220 20% 8%;
+    --foreground: 220 14% 96%;
+    --card: 220 20% 11%;
+    --card-foreground: 220 14% 96%;
+    --popover: 220 20% 11%;
+    --popover-foreground: 220 14% 96%;
+    --primary: 215 50% 55%;
+    --primary-foreground: 220 20% 8%;
+    --secondary: 220 14% 18%;
+    --secondary-foreground: 220 14% 96%;
+    --muted: 220 14% 18%;
+    --muted-foreground: 220 10% 60%;
+    --accent: 220 14% 18%;
+    --accent-foreground: 220 14% 96%;
+    --destructive: 0 50% 45%;
+    --destructive-foreground: 220 14% 96%;
+    --success: 152 45% 38%;
+    --success-foreground: 220 14% 96%;
+    --warning: 38 70% 45%;
+    --warning-foreground: 220 14% 96%;
+    --border: 220 14% 20%;
+    --input: 220 14% 20%;
+    --ring: 215 50% 55%;
+    --table-header: 220 20% 13%;
+    --table-row-hover: 220 20% 15%;
+    --table-border: 220 14% 22%;
+    --sidebar-background: 220 20% 8%;
+    --sidebar-foreground: 220 14% 96%;
+    --sidebar-primary: 215 50% 55%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 220 14% 15%;
+    --sidebar-accent-foreground: 220 14% 96%;
+    --sidebar-border: 220 14% 18%;
+    --sidebar-ring: 215 50% 55%;
   }
 }
 
@@ -113,6 +115,7 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 }
@@ -120,28 +123,28 @@
 @layer components {
   /* Data table styling */
   .data-table {
-    @apply w-full border-collapse;
+    @apply w-full border-collapse text-sm;
   }
 
   .data-table th {
-    @apply bg-[hsl(var(--table-header))] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground;
+    @apply bg-muted/50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground;
   }
 
   .data-table td {
-    @apply border-t border-[hsl(var(--table-border))] px-4 py-3 text-sm;
+    @apply border-t border-border px-4 py-3;
   }
 
   .data-table tr:hover td {
-    @apply bg-[hsl(var(--table-row-hover))];
+    @apply bg-accent/50;
   }
 
   /* Upload zone styling */
   .upload-zone {
-    @apply flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/30 p-8 transition-all duration-200;
+    @apply flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted/20 p-8 transition-all duration-200;
   }
 
   .upload-zone:hover {
-    @apply border-primary/50 bg-accent;
+    @apply border-primary/40 bg-accent/50;
   }
 
   .upload-zone.active {
@@ -150,20 +153,66 @@
 
   /* Value display utilities */
   .value-positive {
-    @apply text-[hsl(var(--success))];
+    @apply text-success;
   }
 
   .value-negative {
-    @apply text-[hsl(var(--destructive))];
+    @apply text-destructive;
   }
 
-  /* Section card */
-  .section-card {
-    @apply rounded-xl border border-border bg-card p-6 shadow-sm;
+  /* Quadrant card */
+  .quadrant-card {
+    @apply rounded-xl border border-border bg-card shadow-sm transition-shadow duration-200 hover:shadow-md;
   }
 
-  /* Section header */
-  .section-header {
-    @apply mb-4 flex items-center gap-2 text-lg font-semibold text-foreground;
+  .quadrant-header {
+    @apply flex items-center justify-between border-b border-border px-5 py-4;
+  }
+
+  .quadrant-title {
+    @apply flex items-center gap-2.5 text-base font-semibold text-foreground;
+  }
+
+  .quadrant-content {
+    @apply p-5;
+  }
+
+  /* Metric display */
+  .metric-row {
+    @apply flex items-center justify-between py-2;
+  }
+
+  .metric-label {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .metric-value {
+    @apply text-sm font-semibold text-foreground tabular-nums;
+  }
+
+  /* Empty state */
+  .empty-state {
+    @apply flex flex-col items-center justify-center py-8 text-center;
+  }
+
+  .empty-state-icon {
+    @apply mb-3 h-12 w-12 text-muted-foreground/40;
+  }
+
+  .empty-state-text {
+    @apply text-sm text-muted-foreground;
+  }
+
+  /* Scenario card */
+  .scenario-card {
+    @apply flex items-center gap-3 rounded-lg border border-border bg-card p-3 transition-all cursor-pointer;
+  }
+
+  .scenario-card:hover {
+    @apply border-primary/30 bg-accent/30;
+  }
+
+  .scenario-card.selected {
+    @apply border-primary bg-primary/5;
   }
 }
