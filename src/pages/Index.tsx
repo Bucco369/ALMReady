@@ -1,14 +1,13 @@
 import React, { useState, useCallback } from 'react';
-import { BalanceUploader } from '@/components/BalanceUploader';
-import { InterestRateCurveUploader } from '@/components/InterestRateCurveUploader';
-import { ScenarioSelector } from '@/components/ScenarioSelector';
-import { CalculateButton } from '@/components/CalculateButton';
-import { ResultsDisplay } from '@/components/ResultsDisplay';
+import { BalancePositionsCard } from '@/components/BalancePositionsCard';
+import { InterestRateCurvesCard } from '@/components/InterestRateCurvesCard';
+import { ScenariosCard } from '@/components/ScenariosCard';
+import { ResultsCard } from '@/components/ResultsCard';
 import { runCalculation } from '@/lib/calculationEngine';
 import type { Position, YieldCurve, Scenario, CalculationResults } from '@/types/financial';
 import { DEFAULT_SCENARIOS, SAMPLE_POSITIONS, SAMPLE_YIELD_CURVE } from '@/types/financial';
 import { Button } from '@/components/ui/button';
-import { FileSpreadsheet, TrendingUp } from 'lucide-react';
+import { FileSpreadsheet, Calculator, TrendingUp } from 'lucide-react';
 
 const Index = () => {
   // State management
@@ -66,11 +65,11 @@ const Index = () => {
       <header className="border-b border-border bg-card">
         <div className="container mx-auto flex items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
-              <TrendingUp className="h-5 w-5 text-primary-foreground" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
+              <TrendingUp className="h-4.5 w-4.5 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-foreground">EVE/NII Calculator</h1>
+              <h1 className="text-lg font-semibold text-foreground">EVE/NII Calculator</h1>
               <p className="text-xs text-muted-foreground">
                 Interest Rate Risk in the Banking Book
               </p>
@@ -90,50 +89,65 @@ const Index = () => {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-6 py-8">
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Left Column - Inputs */}
-          <div className="space-y-6">
-            <BalanceUploader
-              positions={positions}
-              onPositionsChange={setPositions}
-            />
-            
-            <InterestRateCurveUploader
-              curves={curves}
-              selectedBaseCurve={selectedBaseCurve}
-              selectedDiscountCurve={selectedDiscountCurve}
-              onCurvesChange={setCurves}
-              onBaseCurveSelect={setSelectedBaseCurve}
-              onDiscountCurveSelect={setSelectedDiscountCurve}
-            />
-          </div>
+      <main className="container mx-auto px-6 py-6">
+        {/* 2x2 Quadrant Grid */}
+        <div className="grid gap-5 lg:grid-cols-2 mb-6" style={{ minHeight: 'calc(100vh - 220px)' }}>
+          {/* Top Left - Balance Positions */}
+          <BalancePositionsCard
+            positions={positions}
+            onPositionsChange={setPositions}
+          />
 
-          {/* Right Column - Scenarios & Results */}
-          <div className="space-y-6">
-            <ScenarioSelector
-              scenarios={scenarios}
-              onScenariosChange={setScenarios}
-            />
+          {/* Top Right - Interest Rate Curves */}
+          <InterestRateCurvesCard
+            curves={curves}
+            selectedBaseCurve={selectedBaseCurve}
+            selectedDiscountCurve={selectedDiscountCurve}
+            onCurvesChange={setCurves}
+            onBaseCurveSelect={setSelectedBaseCurve}
+            onDiscountCurveSelect={setSelectedDiscountCurve}
+          />
 
-            <CalculateButton
-              onClick={handleCalculate}
-              disabled={!canCalculate}
-              isCalculating={isCalculating}
-            />
+          {/* Bottom Left - Scenarios */}
+          <ScenariosCard
+            scenarios={scenarios}
+            onScenariosChange={setScenarios}
+          />
 
-            <ResultsDisplay
-              results={results}
-              isCalculating={isCalculating}
-            />
-          </div>
+          {/* Bottom Right - Results */}
+          <ResultsCard
+            results={results}
+            isCalculating={isCalculating}
+          />
+        </div>
+
+        {/* Calculate Button - Prominent */}
+        <div className="flex justify-center">
+          <Button
+            size="lg"
+            className="gap-2.5 px-8 shadow-lg transition-all hover:shadow-xl disabled:opacity-50"
+            onClick={handleCalculate}
+            disabled={!canCalculate || isCalculating}
+          >
+            {isCalculating ? (
+              <>
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                Calculating...
+              </>
+            ) : (
+              <>
+                <Calculator className="h-5 w-5" />
+                Calculate EVE & NII (Indicative)
+              </>
+            )}
+          </Button>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border bg-card py-4">
+      <footer className="border-t border-border bg-card py-4 mt-auto">
         <div className="container mx-auto px-6 text-center text-xs text-muted-foreground">
-          EVE/NII Calculator • Prototype for regulatory IRRBB analysis
+          EVE/NII Calculator • Illustrative IRRBB analysis prototype
         </div>
       </footer>
     </div>
