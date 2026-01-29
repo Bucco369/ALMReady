@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { TrendingUp, Settings2, Eye, CheckCircle2, XCircle } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { TrendingUp, Eye, CheckCircle2, XCircle, CheckSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -21,27 +21,76 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-// Placeholder curve definitions
+// Placeholder curve definitions - these match what's shown in the quadrant
 const AVAILABLE_CURVES = [
-  { id: 'risk-free', name: 'Risk-free curve', loaded: true },
-  { id: 'euribor-3m', name: 'Euribor / OIS 3M', loaded: true },
-  { id: 'euribor-6m', name: 'Euribor / OIS 6M', loaded: false },
-  { id: 'swap-1y', name: 'Swap 1Y', loaded: false },
-  { id: 'govt-bond', name: 'Govt Bond curve', loaded: false },
+  { id: 'risk-free', name: 'Risk-free curve', shortName: 'Risk-free', loaded: true },
+  { id: 'euribor-3m', name: 'Euribor / OIS 3M', shortName: 'Euribor 3M', loaded: true },
+  { id: 'euribor-6m', name: 'Euribor / OIS 6M', shortName: 'Euribor 6M', loaded: false },
+  { id: 'swap-1y', name: 'Swap 1Y', shortName: 'Swap 1Y', loaded: false },
+  { id: 'govt-bond', name: 'Govt Bond curve', shortName: 'Govt Bond', loaded: false },
 ];
 
-// Placeholder curve data for chart
-const PLACEHOLDER_CURVE_DATA = [
-  { tenor: '1M', 'Risk-free': 3.25, 'Euribor 3M': 3.45, 'Risk-free +200bp': 5.25, 'Risk-free -200bp': 1.25 },
-  { tenor: '3M', 'Risk-free': 3.40, 'Euribor 3M': 3.60, 'Risk-free +200bp': 5.40, 'Risk-free -200bp': 1.40 },
-  { tenor: '6M', 'Risk-free': 3.55, 'Euribor 3M': 3.75, 'Risk-free +200bp': 5.55, 'Risk-free -200bp': 1.55 },
-  { tenor: '1Y', 'Risk-free': 3.70, 'Euribor 3M': 3.90, 'Risk-free +200bp': 5.70, 'Risk-free -200bp': 1.70 },
-  { tenor: '2Y', 'Risk-free': 3.85, 'Euribor 3M': 4.05, 'Risk-free +200bp': 5.85, 'Risk-free -200bp': 1.85 },
-  { tenor: '5Y', 'Risk-free': 4.00, 'Euribor 3M': 4.20, 'Risk-free +200bp': 6.00, 'Risk-free -200bp': 2.00 },
-  { tenor: '10Y', 'Risk-free': 4.15, 'Euribor 3M': 4.35, 'Risk-free +200bp': 6.15, 'Risk-free -200bp': 2.15 },
-  { tenor: '20Y', 'Risk-free': 4.25, 'Euribor 3M': 4.45, 'Risk-free +200bp': 6.25, 'Risk-free -200bp': 2.25 },
-  { tenor: '30Y', 'Risk-free': 4.30, 'Euribor 3M': 4.50, 'Risk-free +200bp': 6.30, 'Risk-free -200bp': 2.30 },
-];
+// Color palette for curves
+const CURVE_COLORS: Record<string, string> = {
+  'risk-free': 'hsl(215, 50%, 45%)',
+  'euribor-3m': 'hsl(152, 45%, 42%)',
+  'euribor-6m': 'hsl(280, 45%, 50%)',
+  'swap-1y': 'hsl(38, 70%, 50%)',
+  'govt-bond': 'hsl(340, 50%, 50%)',
+};
+
+// Color palette for scenarios
+const SCENARIO_COLORS: Record<string, string> = {
+  'base': 'hsl(215, 50%, 45%)',
+  'parallel-up': 'hsl(0, 55%, 50%)',
+  'parallel-down': 'hsl(152, 45%, 42%)',
+  'steepener': 'hsl(280, 45%, 50%)',
+  'flattener': 'hsl(38, 70%, 50%)',
+  'short-up': 'hsl(340, 50%, 50%)',
+  'short-down': 'hsl(180, 45%, 42%)',
+};
+
+// Generate placeholder curve data for all curves and scenarios
+const generatePlaceholderData = () => {
+  const tenors = ['1M', '3M', '6M', '1Y', '2Y', '5Y', '10Y', '20Y', '30Y'];
+  const baseRates: Record<string, number[]> = {
+    'risk-free': [3.25, 3.40, 3.55, 3.70, 3.85, 4.00, 4.15, 4.25, 4.30],
+    'euribor-3m': [3.45, 3.60, 3.75, 3.90, 4.05, 4.20, 4.35, 4.45, 4.50],
+    'euribor-6m': [3.50, 3.65, 3.80, 3.95, 4.10, 4.25, 4.40, 4.50, 4.55],
+    'swap-1y': [3.55, 3.70, 3.85, 4.00, 4.15, 4.30, 4.45, 4.55, 4.60],
+    'govt-bond': [3.15, 3.30, 3.45, 3.60, 3.75, 3.90, 4.05, 4.15, 4.20],
+  };
+
+  return tenors.map((tenor, idx) => {
+    const point: Record<string, number | string> = { tenor };
+    
+    // Base curves
+    AVAILABLE_CURVES.forEach(curve => {
+      point[`${curve.id}_base`] = baseRates[curve.id][idx];
+    });
+    
+    // Scenario shocks (simplified illustrative transformations)
+    AVAILABLE_CURVES.forEach(curve => {
+      const base = baseRates[curve.id][idx];
+      // Parallel Up +200bp
+      point[`${curve.id}_parallel-up`] = base + 2.0;
+      // Parallel Down -200bp
+      point[`${curve.id}_parallel-down`] = Math.max(0, base - 2.0);
+      // Steepener: short down, long up (scaled by tenor index)
+      point[`${curve.id}_steepener`] = base + (idx - 4) * 0.3;
+      // Flattener: short up, long down
+      point[`${curve.id}_flattener`] = base - (idx - 4) * 0.25;
+      // Short Up: bigger impact on short tenors
+      point[`${curve.id}_short-up`] = base + Math.max(0, (6 - idx) * 0.4);
+      // Short Down: bigger impact on short tenors
+      point[`${curve.id}_short-down`] = Math.max(0, base - Math.max(0, (6 - idx) * 0.4));
+    });
+    
+    return point;
+  });
+};
+
+const PLACEHOLDER_CURVE_DATA = generatePlaceholderData();
 
 interface CurvesAndScenariosCardProps {
   scenarios: Scenario[];
@@ -57,8 +106,18 @@ export function CurvesAndScenariosCard({
   onSelectedCurvesChange,
 }: CurvesAndScenariosCardProps) {
   const [showDetails, setShowDetails] = useState(false);
-  const [chartCurves, setChartCurves] = useState<string[]>(['Risk-free']);
+  const [chartCurves, setChartCurves] = useState<string[]>(['risk-free']);
   const [chartScenarios, setChartScenarios] = useState<string[]>(['base']);
+
+  // All scenario keys including base
+  const allScenarioKeys = useMemo(() => {
+    return ['base', ...scenarios.map(s => s.id)];
+  }, [scenarios]);
+
+  // All curve IDs
+  const allCurveIds = useMemo(() => {
+    return AVAILABLE_CURVES.map(c => c.id);
+  }, []);
 
   const handleCurveToggle = (curveId: string) => {
     if (selectedCurves.includes(curveId)) {
@@ -76,13 +135,13 @@ export function CurvesAndScenariosCard({
     );
   };
 
-  const toggleChartCurve = (curveName: string) => {
-    if (chartCurves.includes(curveName)) {
+  const toggleChartCurve = (curveId: string) => {
+    if (chartCurves.includes(curveId)) {
       if (chartCurves.length > 1) {
-        setChartCurves(chartCurves.filter(c => c !== curveName));
+        setChartCurves(chartCurves.filter(c => c !== curveId));
       }
     } else {
-      setChartCurves([...chartCurves, curveName]);
+      setChartCurves([...chartCurves, curveId]);
     }
   };
 
@@ -96,18 +155,39 @@ export function CurvesAndScenariosCard({
     }
   };
 
+  const selectAllChartCurves = () => {
+    if (chartCurves.length === allCurveIds.length) {
+      setChartCurves(['risk-free']); // Keep at least one
+    } else {
+      setChartCurves([...allCurveIds]);
+    }
+  };
+
+  const selectAllChartScenarios = () => {
+    if (chartScenarios.length === allScenarioKeys.length) {
+      setChartScenarios(['base']); // Keep at least one
+    } else {
+      setChartScenarios([...allScenarioKeys]);
+    }
+  };
+
   const selectedCurvesCount = selectedCurves.length;
   const enabledScenariosCount = scenarios.filter(s => s.enabled).length;
 
-  const curveColors: Record<string, string> = {
-    'Risk-free': 'hsl(215, 50%, 45%)',
-    'Euribor 3M': 'hsl(152, 45%, 42%)',
+  const getCurveName = (curveId: string) => {
+    return AVAILABLE_CURVES.find(c => c.id === curveId)?.shortName || curveId;
   };
 
-  const scenarioColors: Record<string, string> = {
-    'base': 'hsl(215, 50%, 45%)',
-    '+200bp': 'hsl(0, 55%, 50%)',
-    '-200bp': 'hsl(152, 45%, 42%)',
+  const getScenarioLabel = (scenarioKey: string) => {
+    if (scenarioKey === 'base') return 'Base';
+    const scenario = scenarios.find(s => s.id === scenarioKey);
+    return scenario ? scenario.name : scenarioKey;
+  };
+
+  const getScenarioShock = (scenarioKey: string) => {
+    if (scenarioKey === 'base') return null;
+    const scenario = scenarios.find(s => s.id === scenarioKey);
+    return scenario ? scenario.shockBps : null;
   };
 
   return (
@@ -217,7 +297,7 @@ export function CurvesAndScenariosCard({
 
       {/* Details Modal with Chart */}
       <Dialog open={showDetails} onOpenChange={setShowDetails}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <TrendingUp className="h-4 w-4 text-primary" />
@@ -239,8 +319,8 @@ export function CurvesAndScenariosCard({
                   <YAxis 
                     tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
                     stroke="hsl(var(--border))"
-                    tickFormatter={(v) => `${v}%`}
-                    domain={[0, 8]}
+                    tickFormatter={(v) => `${v.toFixed(1)}%`}
+                    domain={[-1, 8]}
                   />
                   <Tooltip 
                     contentStyle={{ 
@@ -249,118 +329,152 @@ export function CurvesAndScenariosCard({
                       borderRadius: '8px',
                       fontSize: '11px'
                     }}
-                    formatter={(value: number) => [`${value.toFixed(2)}%`, '']}
+                    formatter={(value: number, name: string) => {
+                      const parts = name.split('_');
+                      const curveName = getCurveName(parts[0]);
+                      const scenarioName = getScenarioLabel(parts[1]);
+                      return [`${value.toFixed(2)}%`, `${curveName} (${scenarioName})`];
+                    }}
                   />
-                  <Legend wrapperStyle={{ fontSize: '10px' }} />
+                  <Legend 
+                    wrapperStyle={{ fontSize: '9px' }}
+                    formatter={(value: string) => {
+                      const parts = value.split('_');
+                      const curveName = getCurveName(parts[0]);
+                      const scenarioName = getScenarioLabel(parts[1]);
+                      return `${curveName} - ${scenarioName}`;
+                    }}
+                  />
                   
-                  {/* Base curves */}
-                  {chartCurves.includes('Risk-free') && chartScenarios.includes('base') && (
-                    <Line 
-                      type="monotone" 
-                      dataKey="Risk-free" 
-                      stroke={curveColors['Risk-free']}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  )}
-                  {chartCurves.includes('Euribor 3M') && chartScenarios.includes('base') && (
-                    <Line 
-                      type="monotone" 
-                      dataKey="Euribor 3M" 
-                      stroke={curveColors['Euribor 3M']}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  )}
-                  
-                  {/* Shocked curves */}
-                  {chartCurves.includes('Risk-free') && chartScenarios.includes('+200bp') && (
-                    <Line 
-                      type="monotone" 
-                      dataKey="Risk-free +200bp" 
-                      stroke={scenarioColors['+200bp']}
-                      strokeWidth={1.5}
-                      strokeDasharray="5 5"
-                      dot={false}
-                    />
-                  )}
-                  {chartCurves.includes('Risk-free') && chartScenarios.includes('-200bp') && (
-                    <Line 
-                      type="monotone" 
-                      dataKey="Risk-free -200bp" 
-                      stroke={scenarioColors['-200bp']}
-                      strokeWidth={1.5}
-                      strokeDasharray="5 5"
-                      dot={false}
-                    />
+                  {/* Render lines for all selected curve + scenario combinations */}
+                  {chartCurves.map(curveId => 
+                    chartScenarios.map(scenarioKey => {
+                      const dataKey = `${curveId}_${scenarioKey}`;
+                      const isBase = scenarioKey === 'base';
+                      const color = isBase ? CURVE_COLORS[curveId] : SCENARIO_COLORS[scenarioKey];
+                      
+                      return (
+                        <Line
+                          key={dataKey}
+                          type="monotone"
+                          dataKey={dataKey}
+                          stroke={color}
+                          strokeWidth={isBase ? 2 : 1.5}
+                          strokeDasharray={isBase ? undefined : '5 5'}
+                          dot={false}
+                          name={dataKey}
+                        />
+                      );
+                    })
                   )}
                 </LineChart>
               </ResponsiveContainer>
             </div>
 
             {/* Control Panel */}
-            <div className="border-t border-border pt-3">
-              <div className="grid grid-cols-2 gap-4">
-                {/* Curve toggles */}
-                <div>
-                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                    Display Curves
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {['Risk-free', 'Euribor 3M'].map((curve) => (
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="border-t border-border pt-3">
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Curve toggles */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Display Curves
+                      </span>
                       <button
-                        key={curve}
-                        onClick={() => toggleChartCurve(curve)}
-                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
-                          chartCurves.includes(curve)
-                            ? 'bg-primary/15 text-primary border border-primary/30'
-                            : 'bg-muted/50 text-muted-foreground border border-transparent hover:bg-muted'
-                        }`}
+                        onClick={selectAllChartCurves}
+                        className="inline-flex items-center gap-1 text-[9px] text-primary hover:text-primary/80 transition-colors"
                       >
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: curveColors[curve] }}
-                        />
-                        {curve}
+                        <CheckSquare className="h-3 w-3" />
+                        {chartCurves.length === allCurveIds.length ? 'Deselect all' : 'Select all'}
                       </button>
-                    ))}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {AVAILABLE_CURVES.map((curve) => (
+                        <button
+                          key={curve.id}
+                          onClick={() => toggleChartCurve(curve.id)}
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                            chartCurves.includes(curve.id)
+                              ? 'bg-primary/15 text-primary border border-primary/30'
+                              : 'bg-muted/50 text-muted-foreground border border-transparent hover:bg-muted'
+                          }`}
+                        >
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: CURVE_COLORS[curve.id] }}
+                          />
+                          {curve.shortName}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {/* Scenario toggles */}
-                <div>
-                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">
-                    Display Scenarios
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { key: 'base', label: 'Base' },
-                      { key: '+200bp', label: '+200bp' },
-                      { key: '-200bp', label: '-200bp' },
-                    ].map((scenario) => (
+                  {/* Scenario toggles */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Display Scenarios
+                      </span>
                       <button
-                        key={scenario.key}
-                        onClick={() => toggleChartScenario(scenario.key)}
+                        onClick={selectAllChartScenarios}
+                        className="inline-flex items-center gap-1 text-[9px] text-primary hover:text-primary/80 transition-colors"
+                      >
+                        <CheckSquare className="h-3 w-3" />
+                        {chartScenarios.length === allScenarioKeys.length ? 'Deselect all' : 'Select all'}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {/* Base scenario */}
+                      <button
+                        onClick={() => toggleChartScenario('base')}
                         className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
-                          chartScenarios.includes(scenario.key)
+                          chartScenarios.includes('base')
                             ? 'bg-primary/15 text-primary border border-primary/30'
                             : 'bg-muted/50 text-muted-foreground border border-transparent hover:bg-muted'
                         }`}
                       >
                         <span
                           className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: scenarioColors[scenario.key] }}
+                          style={{ backgroundColor: SCENARIO_COLORS['base'] }}
                         />
-                        {scenario.label}
+                        Base
                       </button>
-                    ))}
+                      
+                      {/* All regulatory scenarios */}
+                      {scenarios.map((scenario) => {
+                        const shockBps = getScenarioShock(scenario.id);
+                        return (
+                          <button
+                            key={scenario.id}
+                            onClick={() => toggleChartScenario(scenario.id)}
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                              chartScenarios.includes(scenario.id)
+                                ? 'bg-primary/15 text-primary border border-primary/30'
+                                : 'bg-muted/50 text-muted-foreground border border-transparent hover:bg-muted'
+                            }`}
+                          >
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ backgroundColor: SCENARIO_COLORS[scenario.id] || 'hsl(var(--muted-foreground))' }}
+                            />
+                            {scenario.name}
+                            {shockBps !== null && (
+                              <span className={`text-[8px] ${shockBps > 0 ? 'text-destructive' : 'text-success'}`}>
+                                ({shockBps > 0 ? '+' : ''}{shockBps}bp)
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </ScrollArea>
 
             {/* Info text */}
-            <p className="text-[10px] text-muted-foreground text-center">
+            <p className="text-[10px] text-muted-foreground text-center shrink-0">
               This chart is illustrative only. Curve transformations will be computed programmatically by the pricing engine.
             </p>
           </div>
