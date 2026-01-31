@@ -1,5 +1,5 @@
-import React, { useCallback, useState, useMemo } from 'react';
-import { Upload, FileSpreadsheet, Eye, RefreshCw, Download, CheckCircle2, XCircle, ChevronRight, ChevronDown, FlaskConical, CalendarIcon, DollarSign } from 'lucide-react';
+import React, { useCallback, useState, useMemo, useRef, useEffect } from 'react';
+import { Upload, FileSpreadsheet, Eye, RefreshCw, Download, CheckCircle2, XCircle, ChevronRight, ChevronDown, FlaskConical, CalendarIcon, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Calendar } from '@/components/ui/calendar';
@@ -267,19 +267,11 @@ export function BalancePositionsCard({ positions, onPositionsChange }: BalancePo
                   </Popover>
                 </div>
                 
-                {/* CET1 Capital Input */}
-                <div className="flex-1">
-                  <div className="relative">
-                    <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-                    <Input
-                      type="number"
-                      placeholder="CET1 Capital"
-                      value={cet1Capital ?? ''}
-                      onChange={(e) => setCet1Capital(e.target.value ? parseFloat(e.target.value) : null)}
-                      className="h-7 text-xs pl-6 pr-2"
-                    />
-                  </div>
-                </div>
+                {/* CET1 Capital Input - Two-state component */}
+                <CET1Input
+                  value={cet1Capital}
+                  onChange={setCet1Capital}
+                />
               </div>
 
               {/* Scrollable Balance Table with Sticky Header */}
@@ -722,5 +714,112 @@ function WhatIfItemRow({ label, amount, type, formatAmount }: WhatIfItemRowProps
         —
       </td>
     </tr>
+  );
+}
+
+// CET1 Capital Input - Two-state component (editable → locked)
+interface CET1InputProps {
+  value: number | null;
+  onChange: (value: number | null) => void;
+}
+
+function CET1Input({ value, onChange }: CET1InputProps) {
+  const [isEditing, setIsEditing] = useState(value === null);
+  const [inputValue, setInputValue] = useState(value?.toString() || '');
+  const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Sync internal state when external value changes (e.g., reset)
+  useEffect(() => {
+    if (value === null) {
+      setIsEditing(true);
+      setInputValue('');
+    } else {
+      setInputValue(value.toString());
+    }
+  }, [value]);
+  
+  // Focus input when entering edit mode
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isEditing]);
+
+  const formatCET1Display = (num: number) => {
+    if (num >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
+    if (num >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
+    if (num >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
+    return num.toLocaleString();
+  };
+
+  const handleConfirm = () => {
+    const parsed = parseFloat(inputValue);
+    if (!isNaN(parsed) && parsed > 0) {
+      onChange(parsed);
+      setIsEditing(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleConfirm();
+    } else if (e.key === 'Escape') {
+      if (value !== null) {
+        setInputValue(value.toString());
+        setIsEditing(false);
+      }
+    }
+  };
+
+  const handleEditClick = () => {
+    setIsEditing(true);
+  };
+
+  if (isEditing) {
+    return (
+      <div className="flex-1">
+        <div className="relative">
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-medium text-muted-foreground">
+            CET1:
+          </span>
+          <Input
+            ref={inputRef}
+            type="number"
+            placeholder="Enter CET1 capital"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={() => {
+              // Only exit edit mode if we have a valid value
+              if (value !== null && inputValue === value.toString()) {
+                setIsEditing(false);
+              }
+            }}
+            className="h-7 text-xs pl-12 pr-2"
+          />
+        </div>
+        <p className="text-[9px] text-muted-foreground mt-0.5 pl-1">Press Enter to confirm</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1">
+      <button
+        onClick={handleEditClick}
+        className={cn(
+          "h-7 w-full px-2 flex items-center justify-between rounded-md border text-xs",
+          "bg-muted/50 border-border/70 hover:bg-muted/80 transition-colors cursor-pointer",
+          "group"
+        )}
+        title="Click to edit CET1 Capital"
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-medium text-muted-foreground">CET1:</span>
+          <span className="font-semibold text-foreground">{formatCET1Display(value!)}</span>
+        </div>
+        <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+      </button>
+    </div>
   );
 }
