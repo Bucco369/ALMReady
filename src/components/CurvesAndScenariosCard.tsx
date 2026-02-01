@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { TrendingUp, Eye, CheckCircle2, XCircle, CheckSquare, Plus, X, Upload, FileSpreadsheet } from 'lucide-react';
+import { TrendingUp, Eye, CheckCircle2, XCircle, CheckSquare, Plus, X, Upload, FileSpreadsheet, RotateCcw, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -125,6 +125,8 @@ export function CurvesAndScenariosCard({
   const [customBps, setCustomBps] = useState<string>('');
   const [showCurveUpload, setShowCurveUpload] = useState(false);
   const [uploadedCurves, setUploadedCurves] = useState<{ id: string; name: string; shortName: string; loaded: boolean }[]>([]);
+  const [curvesLoaded, setCurvesLoaded] = useState(true); // Track if curves are loaded
+  const [showUploadDropzone, setShowUploadDropzone] = useState(false); // Show upload state after reset
 
   // Extract custom scenarios for data generation
   const customScenarios = useMemo(() => {
@@ -252,10 +254,23 @@ export function CurvesAndScenariosCard({
       ];
       setUploadedCurves(prev => [...prev, ...mockCurves]);
       setShowCurveUpload(false);
+      setShowUploadDropzone(false);
+      setCurvesLoaded(true);
     }
   }, []);
 
-  const allDisplayCurves = useMemo(() => [...AVAILABLE_CURVES, ...uploadedCurves], [uploadedCurves]);
+  // Handle reset curves
+  const handleResetCurves = useCallback(() => {
+    setUploadedCurves([]);
+    onSelectedCurvesChange([]);
+    setCurvesLoaded(false);
+    setShowUploadDropzone(true);
+  }, [onSelectedCurvesChange]);
+
+  const allDisplayCurves = useMemo(() => {
+    if (showUploadDropzone) return [];
+    return [...AVAILABLE_CURVES, ...uploadedCurves];
+  }, [uploadedCurves, showUploadDropzone]);
 
   return (
     <>
@@ -264,6 +279,17 @@ export function CurvesAndScenariosCard({
           <div className="flex items-center gap-1.5">
             <TrendingUp className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-semibold text-foreground">Curves & Scenarios</span>
+            {/* Curves Status Indicator - positioned slightly left of center */}
+            <div className="flex items-center gap-1 ml-2">
+              {curvesLoaded ? (
+                <CheckCircle2 className="h-3 w-3 text-success" />
+              ) : (
+                <AlertCircle className="h-3 w-3 text-muted-foreground" />
+              )}
+              <span className={`text-[9px] ${curvesLoaded ? 'text-success' : 'text-muted-foreground'}`}>
+                {curvesLoaded ? 'Curves loaded' : 'No curves'}
+              </span>
+            </div>
           </div>
           <span className="text-[10px] font-medium text-muted-foreground">
             {selectedCurvesCount} curves • {enabledScenariosCount} scenarios
@@ -277,69 +303,107 @@ export function CurvesAndScenariosCard({
               <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
                 Curves
               </div>
-              <ScrollArea className="flex-1">
-                <div className="space-y-1 pr-2">
-                  {allDisplayCurves.map((curve) => (
-                    <label
-                      key={curve.id}
-                      className={`flex items-center gap-1.5 py-1 px-1.5 rounded cursor-pointer transition-colors text-xs ${
-                        selectedCurves.includes(curve.id)
-                          ? 'bg-primary/10'
-                          : 'hover:bg-muted/50'
-                      }`}
-                    >
-                      <Checkbox
-                        checked={selectedCurves.includes(curve.id)}
-                        onCheckedChange={() => handleCurveToggle(curve.id)}
-                        className="h-3 w-3"
-                      />
-                      <span className={`truncate ${selectedCurves.includes(curve.id) ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                        {curve.name}
-                      </span>
-                      {curve.loaded ? (
-                        <CheckCircle2 className="h-2.5 w-2.5 text-success shrink-0 ml-auto" />
-                      ) : (
-                        <XCircle className="h-2.5 w-2.5 text-muted-foreground/50 shrink-0 ml-auto" />
-                      )}
-                    </label>
-                  ))}
-                </div>
-              </ScrollArea>
               
-              {/* Load Curves Button */}
-              <Popover open={showCurveUpload} onOpenChange={setShowCurveUpload}>
-                <PopoverTrigger asChild>
-                  <button className="mt-1.5 text-[9px] text-primary hover:text-primary/80 transition-colors flex items-center gap-1 px-1.5 py-1 rounded hover:bg-primary/5">
-                    <Upload className="h-2.5 w-2.5" />
-                    Load curves (Excel)
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-56 p-3" align="start">
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                      <FileSpreadsheet className="h-3.5 w-3.5 text-primary" />
-                      Load Curves from Excel
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">
-                      Upload an Excel file (.xlsx) containing rate curve data.
-                    </div>
-                    <label className="block">
+              {showUploadDropzone ? (
+                /* Upload Dropzone State */
+                <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
+                  <Upload className="h-6 w-6 text-muted-foreground mb-2" />
+                  <p className="text-xs text-muted-foreground text-center mb-2">
+                    Drop CSV or click to upload
+                  </p>
+                  <div className="flex gap-2">
+                    <label>
                       <Input
                         type="file"
-                        accept=".xlsx,.xls"
+                        accept=".csv,.xlsx,.xls"
                         className="hidden"
                         onChange={handleCurveFileUpload}
                       />
-                      <Button variant="outline" size="sm" asChild className="w-full h-7 text-xs">
-                        <span>
-                          <Upload className="mr-1.5 h-3 w-3" />
-                          Choose File
-                        </span>
+                      <Button variant="outline" size="sm" asChild className="h-6 text-[10px]">
+                        <span>Browse</span>
                       </Button>
                     </label>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 text-[10px]"
+                      onClick={() => {
+                        setShowUploadDropzone(false);
+                        setCurvesLoaded(true);
+                      }}
+                    >
+                      Sample
+                    </Button>
                   </div>
-                </PopoverContent>
-              </Popover>
+                </div>
+              ) : (
+                /* Normal Curve List */
+                <>
+                  <ScrollArea className="flex-1">
+                    <div className="space-y-1 pr-2">
+                      {allDisplayCurves.map((curve) => (
+                        <label
+                          key={curve.id}
+                          className={`flex items-center gap-1.5 py-1 px-1.5 rounded cursor-pointer transition-colors text-xs ${
+                            selectedCurves.includes(curve.id)
+                              ? 'bg-primary/10'
+                              : 'hover:bg-muted/50'
+                          }`}
+                        >
+                          <Checkbox
+                            checked={selectedCurves.includes(curve.id)}
+                            onCheckedChange={() => handleCurveToggle(curve.id)}
+                            className="h-3 w-3"
+                          />
+                          <span className={`truncate ${selectedCurves.includes(curve.id) ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                            {curve.name}
+                          </span>
+                          {curve.loaded ? (
+                            <CheckCircle2 className="h-2.5 w-2.5 text-success shrink-0 ml-auto" />
+                          ) : (
+                            <XCircle className="h-2.5 w-2.5 text-muted-foreground/50 shrink-0 ml-auto" />
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  </ScrollArea>
+              
+                  {/* Load Curves Button */}
+                  <Popover open={showCurveUpload} onOpenChange={setShowCurveUpload}>
+                    <PopoverTrigger asChild>
+                      <button className="mt-1.5 text-[9px] text-primary hover:text-primary/80 transition-colors flex items-center gap-1 px-1.5 py-1 rounded hover:bg-primary/5">
+                        <Upload className="h-2.5 w-2.5" />
+                        Load curves (Excel)
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-56 p-3" align="start">
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                          <FileSpreadsheet className="h-3.5 w-3.5 text-primary" />
+                          Load Curves from Excel
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          Upload an Excel file (.xlsx) containing rate curve data.
+                        </div>
+                        <label className="block">
+                          <Input
+                            type="file"
+                            accept=".xlsx,.xls"
+                            className="hidden"
+                            onChange={handleCurveFileUpload}
+                          />
+                          <Button variant="outline" size="sm" asChild className="w-full h-7 text-xs">
+                            <span>
+                              <Upload className="mr-1.5 h-3 w-3" />
+                              Choose File
+                            </span>
+                          </Button>
+                        </label>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </>
+              )}
             </div>
 
             {/* Vertical divider */}
@@ -430,12 +494,22 @@ export function CurvesAndScenariosCard({
             </div>
           </div>
 
-          <div className="pt-2 border-t border-border/30 mt-2">
+          <div className="pt-2 border-t border-border/30 mt-2 flex gap-2">
+            {/* Reset Curves Button - circular icon button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleResetCurves}
+              className="h-6 w-6 p-0 shrink-0 rounded-full"
+              title="Reset curves"
+            >
+              <RotateCcw className="h-3 w-3" />
+            </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => setShowDetails(true)}
-              className="w-full h-6 text-xs"
+              className="flex-1 h-6 text-xs"
             >
               <Eye className="mr-1 h-3 w-3" />
               View details

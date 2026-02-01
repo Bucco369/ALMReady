@@ -1,23 +1,26 @@
 import React, { useState } from 'react';
-import { Search, ChevronRight, ChevronDown, Minus, FileText, Folder, FolderOpen } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Minus, FileText, Folder, FolderOpen, Eye } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { BALANCE_HIERARCHY, type BalanceNode } from '@/types/whatif';
 import { useWhatIf } from './WhatIfContext';
+import { BalanceDetailsModalRemove } from './BalanceDetailsModalRemove';
 
 // Mock contract search results
 const MOCK_CONTRACTS = [
-  { id: 'NUM_SEC_AC_001234', product: 'Fixed Rate Mortgage', balance: 450000, rate: 3.25 },
-  { id: 'NUM_SEC_AC_001235', product: 'Commercial Loan', balance: 2500000, rate: 4.50 },
-  { id: 'NUM_SEC_AC_001236', product: 'Government Bond', balance: 10000000, rate: 2.10 },
-  { id: 'NUM_SEC_AC_002100', product: 'Term Deposit', balance: 1500000, rate: 3.75 },
-  { id: 'NUM_SEC_AC_002101', product: 'Corporate Bond', balance: 5000000, rate: 4.25 },
+  { id: 'NUM_SEC_AC_001234', product: 'Fixed Rate Mortgage', balance: 450000, rate: 3.25, subcategory: 'mortgages' },
+  { id: 'NUM_SEC_AC_001235', product: 'Commercial Loan', balance: 2500000, rate: 4.50, subcategory: 'loans' },
+  { id: 'NUM_SEC_AC_001236', product: 'Government Bond', balance: 10000000, rate: 2.10, subcategory: 'securities' },
+  { id: 'NUM_SEC_AC_002100', product: 'Term Deposit', balance: 1500000, rate: 3.75, subcategory: 'term-deposits' },
+  { id: 'NUM_SEC_AC_002101', product: 'Corporate Bond', balance: 5000000, rate: 4.25, subcategory: 'securities' },
 ];
 
 export function WhatIfRemoveTab() {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['assets', 'liabilities']));
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedCategoryForDetails, setSelectedCategoryForDetails] = useState<string | null>(null);
   const { addModification } = useWhatIf();
 
   const toggleNode = (nodeId: string) => {
@@ -62,6 +65,11 @@ export function WhatIfRemoveTab() {
     });
   };
 
+  const handleViewDetails = (nodeId: string) => {
+    setSelectedCategoryForDetails(nodeId);
+    setShowDetailsModal(true);
+  };
+
   const handleRemoveContract = (contract: typeof MOCK_CONTRACTS[0]) => {
     // Determine category based on product type (mock logic)
     const isAsset = ['Fixed Rate Mortgage', 'Commercial Loan', 'Government Bond', 'Corporate Bond'].includes(contract.product);
@@ -91,12 +99,17 @@ export function WhatIfRemoveTab() {
     return `$${num}`;
   };
 
-  // Filter contracts based on search
+  // Filter contracts based on search - works globally or within category context
   const filteredContracts = searchQuery.length >= 2
-    ? MOCK_CONTRACTS.filter(c => 
-        c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.product.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+    ? MOCK_CONTRACTS.filter(c => {
+        const matchesSearch = c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          c.product.toLowerCase().includes(searchQuery.toLowerCase());
+        // If a category is selected via details modal, filter by that too
+        if (selectedCategoryForDetails && showDetailsModal) {
+          return matchesSearch && c.subcategory === selectedCategoryForDetails;
+        }
+        return matchesSearch;
+      })
     : [];
 
   return (
@@ -163,11 +176,22 @@ export function WhatIfRemoveTab() {
               expandedNodes={expandedNodes}
               onToggle={toggleNode}
               onRemove={handleRemoveNode}
+              onViewDetails={handleViewDetails}
               formatAmount={formatAmount}
             />
           ))}
         </div>
       </ScrollArea>
+
+      {/* Balance Details Modal for Removal */}
+      {selectedCategoryForDetails && (
+        <BalanceDetailsModalRemove
+          open={showDetailsModal}
+          onOpenChange={setShowDetailsModal}
+          selectedCategory={selectedCategoryForDetails}
+          searchQuery={searchQuery}
+        />
+      )}
     </div>
   );
 }
@@ -179,12 +203,14 @@ interface TreeNodeProps {
   expandedNodes: Set<string>;
   onToggle: (id: string) => void;
   onRemove: (node: BalanceNode, path: string) => void;
+  onViewDetails: (nodeId: string) => void;
   formatAmount: (n: number) => string;
 }
 
-function TreeNode({ node, path, depth, expandedNodes, onToggle, onRemove, formatAmount }: TreeNodeProps) {
+function TreeNode({ node, path, depth, expandedNodes, onToggle, onRemove, onViewDetails, formatAmount }: TreeNodeProps) {
   const isExpanded = expandedNodes.has(node.id);
   const hasChildren = node.children && node.children.length > 0;
+  const isLeaf = !hasChildren;
   
   const isCategory = node.type === 'category';
   const labelColor = node.id === 'assets' ? 'text-success' : node.id === 'liabilities' ? 'text-destructive' : 'text-foreground';
@@ -235,6 +261,22 @@ function TreeNode({ node, path, depth, expandedNodes, onToggle, onRemove, format
           </span>
         )}
 
+        {/* View Details button - only for leaf nodes */}
+        {isLeaf && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewDetails(node.id);
+            }}
+            title="View contracts for removal"
+          >
+            <Eye className="h-2.5 w-2.5" />
+          </Button>
+        )}
+
         {/* Remove button */}
         <Button
           variant="ghost"
@@ -261,6 +303,7 @@ function TreeNode({ node, path, depth, expandedNodes, onToggle, onRemove, format
               expandedNodes={expandedNodes}
               onToggle={onToggle}
               onRemove={onRemove}
+              onViewDetails={onViewDetails}
               formatAmount={formatAmount}
             />
           ))}
