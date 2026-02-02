@@ -137,10 +137,10 @@ const generateEVEData = (
 interface EVEChartProps {
   className?: string;
   fullWidth?: boolean;
-  analysisDate?: Date;
+  analysisDate?: Date | null;
 }
 
-export function EVEChart({ className, fullWidth = false, analysisDate = new Date() }: EVEChartProps) {
+export function EVEChart({ className, fullWidth = false, analysisDate }: EVEChartProps) {
   const [selectedScenario, setSelectedScenario] = useState('worst');
   const [isOpen, setIsOpen] = useState(false);
   const { modifications } = useWhatIf();
@@ -149,19 +149,69 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
   const whatIfImpact = useMemo(() => computeWhatIfImpact(modifications), [modifications]);
   const hasWhatIf = modifications.length > 0;
   
+  // Only generate calendar labels if analysisDate is set
   const data = useMemo(
-    () => generateEVEData(selectedScenario, whatIfImpact, analysisDate), 
+    () => analysisDate ? generateEVEData(selectedScenario, whatIfImpact, analysisDate) : null, 
     [selectedScenario, whatIfImpact, analysisDate]
   );
+
+  // Data without calendar labels for when analysisDate is not set
+  const dataWithoutDates = useMemo(() => {
+    if (analysisDate) return null;
+    // Generate data with placeholder calendar labels
+    return TENORS.map((tenor, index) => {
+      const assetBase = 80 + Math.sin(index * 0.5) * 30 + index * 5;
+      const liabilityBase = -(70 + Math.cos(index * 0.4) * 25 + index * 4);
+      const scenarioMultiplier = selectedScenario === 'parallel-up' ? 1.2 
+        : selectedScenario === 'parallel-down' ? -0.8 
+        : selectedScenario === 'steepener' ? (index / TENORS.length) * 1.5 
+        : selectedScenario === 'flattener' ? ((TENORS.length - index) / TENORS.length) * 1.2
+        : selectedScenario === 'short-up' ? (index < 4 ? 0.8 : 0.2)
+        : selectedScenario === 'short-down' ? (index < 4 ? -0.6 : -0.1)
+        : selectedScenario === 'worst' ? -1.1
+        : 0;
+      
+      const assetScenario = scenarioMultiplier * (10 + index * 2);
+      const liabilityScenario = -scenarioMultiplier * (8 + index * 1.5);
+      const assetWhatIfNormalized = whatIfImpact.assetDelta / 1e7;
+      const liabilityWhatIfNormalized = whatIfImpact.liabilityDelta / 1e7;
+      const tenorWeight = 1 + Math.sin(index * 0.3) * 0.3;
+      const assetNewPosition = assetWhatIfNormalized * tenorWeight;
+      const liabilityNewPosition = -Math.abs(liabilityWhatIfNormalized) * tenorWeight;
+      const adjustedLiabilityNewPosition = whatIfImpact.liabilityDelta >= 0 
+        ? liabilityNewPosition 
+        : Math.abs(liabilityWhatIfNormalized) * tenorWeight;
+      
+      const totalAssets = assetBase + Math.abs(assetScenario) + assetNewPosition;
+      const totalLiabilities = liabilityBase + liabilityScenario + adjustedLiabilityNewPosition;
+      const netEV = totalAssets + totalLiabilities;
+      
+      return {
+        tenor: tenor.label,
+        calendarLabel: null,
+        assetBase,
+        assetScenario: Math.abs(assetScenario),
+        assetNewPosition: Math.max(0, assetNewPosition),
+        assetNewPositionNeg: Math.min(0, assetNewPosition),
+        liabilityBase,
+        liabilityScenario: -Math.abs(liabilityScenario),
+        liabilityNewPosition: Math.min(0, adjustedLiabilityNewPosition),
+        liabilityNewPositionPos: Math.max(0, adjustedLiabilityNewPosition),
+        netEV,
+      };
+    });
+  }, [selectedScenario, whatIfImpact, analysisDate]);
+
+  const chartData = data || dataWithoutDates;
   
   const formatValue = (value: number) => {
     if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(0)}B`;
     return `${value.toFixed(0)}M`;
   };
 
-  // Custom X-axis tick with dual labels
+  // Custom X-axis tick with dual labels (only show calendar label if analysisDate is set)
   const CustomXAxisTick = ({ x, y, payload }: any) => {
-    const dataPoint = data.find(d => d.tenor === payload.value);
+    const dataPoint = chartData?.find((d: any) => d.tenor === payload.value);
     return (
       <g transform={`translate(${x},${y})`}>
         <text
@@ -175,17 +225,19 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
         >
           {payload.value}
         </text>
-        <text
-          x={0}
-          y={0}
-          dy={22}
-          textAnchor="middle"
-          fill="hsl(var(--muted-foreground))"
-          fontSize={fullWidth ? 8 : 7}
-          opacity={0.7}
-        >
-          {dataPoint?.calendarLabel}
-        </text>
+        {dataPoint?.calendarLabel && (
+          <text
+            x={0}
+            y={0}
+            dy={22}
+            textAnchor="middle"
+            fill="hsl(var(--muted-foreground))"
+            fontSize={fullWidth ? 8 : 7}
+            opacity={0.7}
+          >
+            {dataPoint.calendarLabel}
+          </text>
+        )}
       </g>
     );
   };
@@ -200,7 +252,7 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
     const liabilityNew = payload.find((p: any) => p.dataKey === 'liabilityNewPosition')?.value || 0;
     const liabilityNewPos = payload.find((p: any) => p.dataKey === 'liabilityNewPositionPos')?.value || 0;
     const netEV = payload.find((p: any) => p.dataKey === 'netEV')?.value || 0;
-    const dataPoint = data.find(d => d.tenor === label);
+    const dataPoint = chartData?.find((d: any) => d.tenor === label);
     
     const totalAssetWhatIf = assetNew + assetNewNeg;
     const totalLiabilityWhatIf = liabilityNew + liabilityNewPos;
@@ -208,7 +260,7 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
     return (
       <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
         <div className="font-medium text-foreground mb-1.5">
-          {label} <span className="text-muted-foreground font-normal">({dataPoint?.calendarLabel})</span>
+          {label} {dataPoint?.calendarLabel && <span className="text-muted-foreground font-normal">({dataPoint.calendarLabel})</span>}
         </div>
         <div className="space-y-1">
           <div className="text-success">Assets: {formatValue(assetBase)}</div>
@@ -230,6 +282,8 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
   };
 
   const chartHeight = fullWidth ? 'h-[calc(100%-60px)]' : 'h-[180px]';
+  
+  if (!chartData) return null;
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
@@ -248,7 +302,7 @@ export function EVEChart({ className, fullWidth = false, analysisDate = new Date
           <div className={`flex-1 px-2 ${fullWidth ? 'min-h-0' : chartHeight}`}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
-                data={data}
+                data={chartData}
                 margin={{ top: 10, right: 15, left: 0, bottom: 25 }}
                 stackOffset="sign"
               >

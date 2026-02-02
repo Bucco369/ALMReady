@@ -21,7 +21,7 @@ interface ResultsCardProps {
 export function ResultsCard({ results, isCalculating }: ResultsCardProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [activeChart, setActiveChart] = useState<'eve' | 'nii'>('eve');
-  const { modifications, isApplied, cet1Capital: contextCet1 } = useWhatIf();
+  const { modifications, isApplied, cet1Capital: contextCet1, analysisDate } = useWhatIf();
   
   const hasModifications = modifications.length > 0 && isApplied;
   
@@ -227,9 +227,9 @@ export function ResultsCard({ results, isCalculating }: ResultsCardProps) {
             <div className="w-2/3 flex flex-col min-h-0">
               <div className="rounded-lg border border-border overflow-hidden flex-1 min-h-0">
                 {activeChart === 'eve' ? (
-                  <EVEChart fullWidth />
+                  <EVEChart fullWidth analysisDate={analysisDate} />
                 ) : (
-                  <NIIChart fullWidth />
+                  <NIIChart fullWidth analysisDate={analysisDate} />
                 )}
               </div>
             </div>
