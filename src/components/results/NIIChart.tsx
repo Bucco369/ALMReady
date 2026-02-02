@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
   ComposedChart,
-  Bar,
   Line,
   XAxis,
   YAxis,
@@ -9,6 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  Legend,
 } from 'recharts';
 import {
   Popover,
@@ -40,12 +40,12 @@ function getCalendarLabel(analysisDate: Date, monthsToAdd: number): string {
   return format(targetDate, 'MMM yyyy');
 }
 
-// Generate placeholder data for NII chart
-const generateNIIData = (scenario: string, analysisDate: Date) => {
+// Generate placeholder data for NII chart (lines only)
+const generateNIIData = (scenario: string, analysisDate: Date | null) => {
   return MONTHS.map((month, index) => {
-    // Base values - asset margin positive, liability margin negative
-    const assetBase = 25 + Math.sin(index * 0.4) * 8 + index * 0.5;
-    const liabilityBase = -(18 + Math.cos(index * 0.3) * 5 + index * 0.3);
+    // Base values - asset margin positive, liability margin negative (shown as positive for lines)
+    const assetMargin = 25 + Math.sin(index * 0.4) * 8 + index * 0.5;
+    const liabilityMargin = 18 + Math.cos(index * 0.3) * 5 + index * 0.3;
     
     // Scenario adjustments
     const scenarioMultiplier = scenario === 'parallel-up' ? 0.8 
@@ -57,28 +57,24 @@ const generateNIIData = (scenario: string, analysisDate: Date) => {
       : scenario === 'worst' ? -0.7
       : 0;
     
-    const assetScenario = scenarioMultiplier * (3 + index * 0.3);
-    const liabilityScenario = -scenarioMultiplier * (2 + index * 0.2);
+    const assetScenarioAdj = scenarioMultiplier * (3 + index * 0.3);
+    const liabilityScenarioAdj = scenarioMultiplier * (2 + index * 0.2);
     
-    // New position impact
-    const assetNewPosition = 1.5 + Math.random() * 2;
-    const liabilityNewPosition = -(1 + Math.random() * 1.5);
+    // Final values for lines
+    const assetTotal = assetMargin + assetScenarioAdj;
+    const liabilityTotal = liabilityMargin + liabilityScenarioAdj;
     
-    // Net NII = asset margin - liability margin (base)
-    const netNII = assetBase + liabilityBase;
+    // Net NII = asset margin - liability margin
+    const netNII = assetTotal - liabilityTotal;
 
-    // Calendar label for this month
-    const calendarLabel = getCalendarLabel(analysisDate, month.monthsToAdd);
+    // Calendar label for this month (only if analysisDate is set)
+    const calendarLabel = analysisDate ? getCalendarLabel(analysisDate, month.monthsToAdd) : null;
     
     return {
       month: month.label,
       calendarLabel,
-      assetBase,
-      assetScenario: Math.abs(assetScenario),
-      assetNewPosition,
-      liabilityBase,
-      liabilityScenario: -Math.abs(liabilityScenario),
-      liabilityNewPosition,
+      assetMargin: assetTotal,
+      liabilityMargin: liabilityTotal,
       netNII,
     };
   });
@@ -87,15 +83,15 @@ const generateNIIData = (scenario: string, analysisDate: Date) => {
 interface NIIChartProps {
   className?: string;
   fullWidth?: boolean;
-  analysisDate?: Date;
+  analysisDate?: Date | null;
 }
 
-export function NIIChart({ className, fullWidth = false, analysisDate = new Date() }: NIIChartProps) {
+export function NIIChart({ className, fullWidth = false, analysisDate }: NIIChartProps) {
   const [selectedScenario, setSelectedScenario] = useState('worst');
   const [isOpen, setIsOpen] = useState(false);
   
   const data = useMemo(
-    () => generateNIIData(selectedScenario, analysisDate),
+    () => generateNIIData(selectedScenario, analysisDate ?? null),
     [selectedScenario, analysisDate]
   );
   
@@ -103,7 +99,7 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
     return `${value.toFixed(1)}M`;
   };
 
-  // Custom X-axis tick with dual labels
+  // Custom X-axis tick with dual labels (only show calendar label if analysisDate is set)
   const CustomXAxisTick = ({ x, y, payload }: any) => {
     const dataPoint = data.find(d => d.month === payload.value);
     return (
@@ -119,17 +115,19 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
         >
           {payload.value}
         </text>
-        <text
-          x={0}
-          y={0}
-          dy={22}
-          textAnchor="middle"
-          fill="hsl(var(--muted-foreground))"
-          fontSize={fullWidth ? 8 : 7}
-          opacity={0.7}
-        >
-          {dataPoint?.calendarLabel}
-        </text>
+        {dataPoint?.calendarLabel && (
+          <text
+            x={0}
+            y={0}
+            dy={22}
+            textAnchor="middle"
+            fill="hsl(var(--muted-foreground))"
+            fontSize={fullWidth ? 8 : 7}
+            opacity={0.7}
+          >
+            {dataPoint.calendarLabel}
+          </text>
+        )}
       </g>
     );
   };
@@ -138,15 +136,19 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
     if (!active || !payload?.length) return null;
     const dataPoint = data.find(d => d.month === label);
     
+    const assetMargin = payload.find((p: any) => p.dataKey === 'assetMargin')?.value || 0;
+    const liabilityMargin = payload.find((p: any) => p.dataKey === 'liabilityMargin')?.value || 0;
+    const netNII = payload.find((p: any) => p.dataKey === 'netNII')?.value || 0;
+    
     return (
       <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
         <div className="font-medium text-foreground mb-1.5">
-          {label} <span className="text-muted-foreground font-normal">({dataPoint?.calendarLabel})</span>
+          {label} {dataPoint?.calendarLabel && <span className="text-muted-foreground font-normal">({dataPoint.calendarLabel})</span>}
         </div>
         <div className="space-y-1">
-          <div className="text-success">Asset Margin: {formatValue(payload.find((p: any) => p.dataKey === 'assetBase')?.value || 0)}</div>
-          <div className="text-destructive">Liability Margin: {formatValue(Math.abs(payload.find((p: any) => p.dataKey === 'liabilityBase')?.value || 0))}</div>
-          <div className="text-primary font-medium">Net NII: {formatValue(payload.find((p: any) => p.dataKey === 'netNII')?.value || 0)}</div>
+          <div className="text-success">Asset Margin: {formatValue(assetMargin)}</div>
+          <div className="text-destructive">Liability Margin: {formatValue(liabilityMargin)}</div>
+          <div className="text-primary font-medium">Net NII: {formatValue(netNII)}</div>
         </div>
       </div>
     );
@@ -171,7 +173,6 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
               <ComposedChart
                 data={data}
                 margin={{ top: 10, right: 15, left: 0, bottom: 25 }}
-                stackOffset="sign"
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
                 <XAxis 
@@ -185,29 +186,43 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
                   tick={{ fontSize: fullWidth ? 10 : 9, fill: 'hsl(var(--muted-foreground))' }}
                   axisLine={{ stroke: 'hsl(var(--border))' }}
                   tickLine={false}
-                  tickFormatter={(v) => `${Math.abs(v)}`}
+                  tickFormatter={(v) => `${v}`}
                   width={40}
                 />
                 <Tooltip content={<CustomTooltip />} />
                 <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1.5} />
                 
-                {/* Asset bars (positive, stacked) */}
-                <Bar dataKey="assetBase" stackId="main" fill="hsl(var(--success))" opacity={0.8} />
-                <Bar dataKey="assetScenario" stackId="main" fill="hsl(var(--success))" opacity={0.5} />
-                <Bar dataKey="assetNewPosition" stackId="main" fill="hsl(var(--success))" opacity={0.3} />
+                {/* Asset Margin line */}
+                <Line 
+                  type="monotone" 
+                  dataKey="assetMargin" 
+                  name="Asset Margin"
+                  stroke="hsl(var(--success))" 
+                  strokeWidth={2}
+                  dot={{ r: fullWidth ? 3 : 2, fill: 'hsl(var(--success))' }}
+                  activeDot={{ r: fullWidth ? 5 : 4 }}
+                />
                 
-                {/* Liability bars (negative, same stack for vertical alignment) */}
-                <Bar dataKey="liabilityBase" stackId="main" fill="hsl(var(--destructive))" opacity={0.8} />
-                <Bar dataKey="liabilityScenario" stackId="main" fill="hsl(var(--destructive))" opacity={0.5} />
-                <Bar dataKey="liabilityNewPosition" stackId="main" fill="hsl(var(--destructive))" opacity={0.3} />
+                {/* Liability Margin line */}
+                <Line 
+                  type="monotone" 
+                  dataKey="liabilityMargin" 
+                  name="Liability Margin"
+                  stroke="hsl(var(--destructive))" 
+                  strokeWidth={2}
+                  dot={{ r: fullWidth ? 3 : 2, fill: 'hsl(var(--destructive))' }}
+                  activeDot={{ r: fullWidth ? 5 : 4 }}
+                />
                 
                 {/* Net NII line */}
                 <Line 
                   type="monotone" 
                   dataKey="netNII" 
+                  name="Net NII"
                   stroke="hsl(var(--primary))" 
-                  strokeWidth={2}
+                  strokeWidth={2.5}
                   dot={{ r: fullWidth ? 4 : 3, fill: 'hsl(var(--primary))' }}
+                  activeDot={{ r: fullWidth ? 6 : 5 }}
                 />
               </ComposedChart>
             </ResponsiveContainer>
@@ -216,22 +231,14 @@ export function NIIChart({ className, fullWidth = false, analysisDate = new Date
           {/* Legend */}
           <div className="flex items-center justify-center gap-6 px-3 py-2 text-[9px] shrink-0">
             <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-0.5">
-                <div className="w-2.5 h-2.5 rounded-sm bg-success opacity-80" />
-                <div className="w-2.5 h-2.5 rounded-sm bg-success opacity-50" />
-                <div className="w-2.5 h-2.5 rounded-sm bg-success opacity-30" />
-              </div>
-              <span className="text-muted-foreground">Asset Margin (Base / Scenario / New)</span>
+              <div className="w-4 h-0.5 rounded bg-success" />
+              <span className="text-muted-foreground">Asset Margin</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-0.5">
-                <div className="w-2.5 h-2.5 rounded-sm bg-destructive opacity-80" />
-                <div className="w-2.5 h-2.5 rounded-sm bg-destructive opacity-50" />
-                <div className="w-2.5 h-2.5 rounded-sm bg-destructive opacity-30" />
-              </div>
-              <span className="text-muted-foreground">Liability Margin (Base / Scenario / New)</span>
+              <div className="w-4 h-0.5 rounded bg-destructive" />
+              <span className="text-muted-foreground">Liability Margin</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <div className="w-5 h-0.5 rounded bg-primary" />
               <span className="text-muted-foreground">Net NII</span>
             </div>
