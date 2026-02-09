@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# --- Local Python / caches / runtime data ---
+backend/.venv/
+backend/app/__pycache__/
+backend/data/
+**/__pycache__/
+*.pyc
+*.pyo
+.DS_Store
