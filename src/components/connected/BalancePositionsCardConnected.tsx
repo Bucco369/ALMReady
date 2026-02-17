@@ -18,7 +18,7 @@
  *   before child component handles them – pragmatic backend integration pattern.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BalancePositionsCard } from "@/components/BalancePositionsCard";
 import {
   getBalanceSummary,
@@ -99,6 +99,9 @@ export function BalancePositionsCardConnected({
   sessionId,
 }: BalancePositionsCardConnectedProps) {
   const [balanceSummary, setBalanceSummary] = useState<BalanceSummaryResponse | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const phase2TimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshSummary = useCallback(async () => {
     if (!sessionId) return;
@@ -129,12 +132,58 @@ export function BalancePositionsCardConnected({
   const handleBalanceUpload = useCallback(
     async (file: File) => {
       if (!sessionId) return;
+
+      // Cancel any leftover phase-2 timer from a previous upload.
+      if (phase2TimerRef.current) {
+        clearInterval(phase2TimerRef.current);
+        phase2TimerRef.current = null;
+      }
+
+      setIsUploading(true);
+      setUploadProgress(0);
+
+      // ── Phase-2 estimation ─────────────────────────────────────────────
+      // After bytes finish transmitting the backend parses the file.
+      // ZIP files contain multiple CSVs → much heavier than Excel.
+      // Estimate: ~10 s/MB for ZIP, ~5 s/MB for Excel. Min 10 s, max 3 min.
+      const sizeMB = file.size / (1024 * 1024);
+      const estimatedParsingMs = isZipFile(file)
+        ? Math.min(180_000, Math.max(10_000, sizeMB * 10_000))
+        : Math.min(90_000,  Math.max(5_000,  sizeMB * 5_000));
+
+      // Phase 2 moves the bar from 80 → 98 over estimatedParsingMs.
+      const intervalMs = 250;
+      const stepPerTick = 18 / (estimatedParsingMs / intervalMs);
+
+      const startPhase2 = () => {
+        if (phase2TimerRef.current) return; // guard double-fire
+        phase2TimerRef.current = setInterval(() => {
+          setUploadProgress((prev) => {
+            const next = prev + stepPerTick;
+            if (next >= 98) {
+              clearInterval(phase2TimerRef.current!);
+              phase2TimerRef.current = null;
+              return 98;
+            }
+            return next;
+          });
+        }, intervalMs);
+      };
+
       try {
+        const onProgress = (pct: number) => setUploadProgress(pct); // 0→80
         if (isZipFile(file)) {
-          await uploadBalanceZip(sessionId, file);
+          await uploadBalanceZip(sessionId, file, onProgress, startPhase2);
         } else {
-          await uploadBalanceExcel(sessionId, file);
+          await uploadBalanceExcel(sessionId, file, onProgress, startPhase2);
         }
+
+        // Server responded → stop phase-2 timer and complete.
+        if (phase2TimerRef.current) {
+          clearInterval(phase2TimerRef.current);
+          phase2TimerRef.current = null;
+        }
+        setUploadProgress(100);
         setUploadedSessionMarker(sessionId);
         await refreshSummary();
       } catch (error) {
@@ -142,6 +191,13 @@ export function BalancePositionsCardConnected({
           "[BalancePositionsCardConnected] failed to upload balance",
           error
         );
+      } finally {
+        if (phase2TimerRef.current) {
+          clearInterval(phase2TimerRef.current);
+          phase2TimerRef.current = null;
+        }
+        setIsUploading(false);
+        setUploadProgress(0);
       }
     },
     [refreshSummary, sessionId]
@@ -214,6 +270,8 @@ export function BalancePositionsCardConnected({
         onPositionsChange={onPositionsChange}
         sessionId={sessionId}
         summaryTree={balanceSummary?.summary_tree ?? null}
+        isUploading={isUploading}
+        uploadProgress={uploadProgress}
       />
     </div>
   );
