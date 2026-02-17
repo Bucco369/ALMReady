@@ -52,8 +52,6 @@ import {
   type CurvePoint,
   type CurvesSummaryResponse,
 } from '@/lib/api';
-import { clearSessionId, getOrCreateSessionId } from '@/lib/session';
-import { useSession } from '@/hooks/useSession';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
 import { buildScenarioPoints } from '@/lib/curves/scenarios';
 import { getCurveDisplayLabel, getCurveTooltipLabel } from '@/lib/curves/labels';
@@ -294,21 +292,9 @@ function getScenarioColor(scenarioId: string, shockBps?: number): string {
   return SCENARIO_COLORS[scenarioId] ?? SCENARIO_COLORS.custom;
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isStaleSessionError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes('session not found') ||
-    message.includes('unknown session') ||
-    message.includes('invalid session')
-  );
-}
-
 function isNoCurvesUploadedError(error: unknown): boolean {
-  return getErrorMessage(error).toLowerCase().includes('no curves uploaded');
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes('no curves uploaded');
 }
 
 function getUploadedSessionMarker(): string | null {
@@ -321,11 +307,6 @@ function setUploadedSessionMarker(sessionId: string): void {
 
 function clearUploadedSessionMarker(): void {
   localStorage.removeItem(CURVES_UPLOADED_SESSION_KEY);
-}
-
-function clearSessionState(): void {
-  clearSessionId();
-  clearUploadedSessionMarker();
 }
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -343,6 +324,7 @@ interface CurvesAndScenariosCardProps {
   onScenariosChange: (scenarios: Scenario[]) => void;
   selectedCurves: string[];
   onSelectedCurvesChange: (curves: string[]) => void;
+  sessionId: string | null;
 }
 
 export function CurvesAndScenariosCard({
@@ -350,11 +332,9 @@ export function CurvesAndScenariosCard({
   onScenariosChange,
   selectedCurves,
   onSelectedCurvesChange,
+  sessionId,
 }: CurvesAndScenariosCardProps) {
   const { analysisDate } = useWhatIf();
-  const { sessionId, loading } = useSession();
-
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [chartMode, setChartMode] = useState<ChartMode>('curves');
   const [chartCurves, setChartCurves] = useState<string[]>([]);
@@ -380,10 +360,6 @@ export function CurvesAndScenariosCard({
   useEffect(() => {
     pointsRef.current = curvePointsById;
   }, [curvePointsById]);
-
-  useEffect(() => {
-    if (sessionId) setActiveSessionId(sessionId);
-  }, [sessionId]);
 
   const availableCurves = useMemo(() => {
     // Keep the exact row order from uploaded Excel.
@@ -417,32 +393,9 @@ export function CurvesAndScenariosCard({
   const enabledScenariosCount = useMemo(() => scenarios.filter((scenario) => scenario.enabled).length, [scenarios]);
   const curvesLoaded = availableCurveIds.length > 0;
 
-  const ensureSessionId = useCallback(async (): Promise<string> => {
-    if (activeSessionId) return activeSessionId;
-    const nextSessionId = await getOrCreateSessionId();
-    setActiveSessionId(nextSessionId);
-    return nextSessionId;
-  }, [activeSessionId]);
-
-  const withSessionRetry = useCallback(
-    async <T,>(request: (resolvedSessionId: string) => Promise<T>): Promise<T> => {
-      let resolvedSessionId = await ensureSessionId();
-      try {
-        return await request(resolvedSessionId);
-      } catch (error) {
-        if (!isStaleSessionError(error)) throw error;
-        clearSessionState();
-        resolvedSessionId = await getOrCreateSessionId();
-        setActiveSessionId(resolvedSessionId);
-        return request(resolvedSessionId);
-      }
-    },
-    [ensureSessionId]
-  );
-
   const ensureCurvePoints = useCallback(
     async (curveId: string) => {
-      if (!curveId) return;
+      if (!curveId || !sessionId) return;
       if (pointsRef.current[curveId]) return;
 
       if (inFlightPointLoadsRef.current[curveId]) {
@@ -450,20 +403,20 @@ export function CurvesAndScenariosCard({
         return;
       }
 
-      const loadPromise = withSessionRetry(async (resolvedSessionId) => {
-        const response = await getCurvePoints(resolvedSessionId, curveId);
+      const loadPromise = (async () => {
+        const response = await getCurvePoints(sessionId, curveId);
         setCurvePointsById((prev) => {
           if (prev[curveId]) return prev;
           return { ...prev, [curveId]: response.points };
         });
-      }).finally(() => {
+      })().finally(() => {
         delete inFlightPointLoadsRef.current[curveId];
       });
 
       inFlightPointLoadsRef.current[curveId] = loadPromise;
       await loadPromise;
     },
-    [withSessionRetry]
+    [sessionId]
   );
 
   const applyCurvesSummary = useCallback(
@@ -517,9 +470,10 @@ export function CurvesAndScenariosCard({
   );
 
   const refreshCurvesSummary = useCallback(async () => {
+    if (!sessionId) return;
     setIsRefreshingSummary(true);
     try {
-      const summary = await withSessionRetry((resolvedSessionId) => getCurvesSummary(resolvedSessionId));
+      const summary = await getCurvesSummary(sessionId);
       setUploadedSessionMarker(summary.session_id);
       await applyCurvesSummary(summary);
     } catch (error) {
@@ -537,19 +491,19 @@ export function CurvesAndScenariosCard({
     } finally {
       setIsRefreshingSummary(false);
     }
-  }, [applyCurvesSummary, onSelectedCurvesChange, withSessionRetry]);
+  }, [applyCurvesSummary, onSelectedCurvesChange, sessionId]);
 
   useEffect(() => {
-    if (loading || !activeSessionId) return;
+    if (!sessionId) return;
 
-    if (getUploadedSessionMarker() === activeSessionId) {
+    if (getUploadedSessionMarker() === sessionId) {
       void refreshCurvesSummary();
     } else {
       setShowUploadDropzone(true);
       setCurvesSummary(null);
       setCurvePointsById({});
     }
-  }, [activeSessionId, loading, refreshCurvesSummary]);
+  }, [sessionId, refreshCurvesSummary]);
 
   useEffect(() => {
     if (!showDetails) return;
@@ -620,11 +574,11 @@ export function CurvesAndScenariosCard({
 
   const handleUploadFile = useCallback(
     async (file: File) => {
-      if (!isExcelFile(file)) return;
+      if (!isExcelFile(file) || !sessionId) return;
 
       setIsUploading(true);
       try {
-        const summary = await withSessionRetry((resolvedSessionId) => uploadCurvesExcel(resolvedSessionId, file));
+        const summary = await uploadCurvesExcel(sessionId, file);
         setUploadedSessionMarker(summary.session_id);
         await applyCurvesSummary(summary);
       } catch (error) {
@@ -633,7 +587,7 @@ export function CurvesAndScenariosCard({
         setIsUploading(false);
       }
     },
-    [applyCurvesSummary, withSessionRetry]
+    [applyCurvesSummary, sessionId]
   );
 
   const handleCurveFileUpload = useCallback(

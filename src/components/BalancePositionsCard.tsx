@@ -478,8 +478,8 @@ export function BalancePositionsCard({
         <div className="dashboard-card-content">
           {!isLoaded ? <div className={`compact-upload-zone ${isDragging ? 'active' : ''}`} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}>
               <Upload className="h-5 w-5 text-muted-foreground mb-1" />
-              <p className="text-xs text-muted-foreground mb-2">Drop CSV or click to upload</p>
-              <Input ref={uploadInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleInputChange} />
+              <p className="text-xs text-muted-foreground mb-2">Drop CSV, Excel, or ZIP to upload</p>
+              <Input ref={uploadInputRef} type="file" accept=".csv,.xlsx,.xls,.zip" className="hidden" onChange={handleInputChange} />
               <div className="flex gap-1.5">
                 <Button variant="outline" size="sm" onClick={handleBrowseClick} className="h-6 text-xs px-2">
                   Browse

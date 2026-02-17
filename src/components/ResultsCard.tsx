@@ -48,12 +48,14 @@ export function ResultsCard({
   // CET1 capital for percentage calculations (default to 500M if not set)
   const cet1Capital = contextCet1 || 500_000_000;
 
-  // Mock What-If impact values (in real implementation, these would come from calculations)
+  // What-If impact values – zeroed out until backend What-If overlay is implemented.
+  // When Phase 2 lands, these will come from a separate /calculate call with
+  // What-If modifications applied server-side.
   const whatIfImpact = {
-    baseEve: hasModifications ? 12_500_000 : 0,
-    worstEve: hasModifications ? 8_200_000 : 0,
-    baseNii: hasModifications ? -2_100_000 : 0,
-    worstNii: hasModifications ? -1_800_000 : 0
+    baseEve: 0,
+    worstEve: 0,
+    baseNii: 0,
+    worstNii: 0
   };
   const formatCurrency = (num: number) => {
     return new Intl.NumberFormat('en-US', {

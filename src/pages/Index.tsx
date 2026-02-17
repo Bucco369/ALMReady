@@ -11,18 +11,16 @@
  *    - Bottom: ResultsCard (EVE/NII results + charts)
  * 4. Owns the "Calculate EVE & NII" button and orchestrates the calculation.
  *
- * === CURRENT LIMITATIONS ===
- * - CALCULATION IS LOCAL: handleCalculate() calls runCalculation() from
- *   calculationEngine.ts, which is a simplified frontend-only engine.
- *   Phase 1 will replace this with a POST /api/sessions/{id}/calculate
- *   call to the backend, which delegates to the external Python engine.
- * - NO WHAT-IF IN CALCULATION: The What-If overlay (WhatIfContext) is not
- *   passed to the calculation. Phase 1 will send modifications to the backend.
- * - NO BEHAVIOURAL IN CALCULATION: BehaviouralContext params are not used.
- * - SAMPLE CURVE FALLBACK: If no curves are uploaded, a hardcoded USD sample
- *   curve is used. This is a demo convenience, not production behavior.
- * - SYNCHRONOUS FEEL: setTimeout(500ms) simulates async; the real backend
- *   call will be genuinely async and may take seconds for large balances.
+ * === CALCULATION FLOW ===
+ * handleCalculate() calls POST /api/sessions/{id}/calculate on the backend,
+ * which runs EVE/NII via the ALMReady motor engine. The backend requires:
+ * - Balance positions uploaded via /balance or /balance/zip
+ * - Yield curves uploaded via /curves
+ * The response is mapped from the backend's snake_case schema to the
+ * frontend's camelCase CalculationResults interface.
+ *
+ * Falls back to the local calculationEngine.ts if no session is available
+ * (e.g. when using sample data without a backend connection).
  */
 
 import React, { useState, useCallback } from 'react';
@@ -31,6 +29,8 @@ import { CurvesAndScenariosCard } from '@/components/CurvesAndScenariosCard';
 import { ResultsCard } from '@/components/ResultsCard';
 import { WhatIfProvider } from '@/components/whatif/WhatIfContext';
 import { BehaviouralProvider } from '@/components/behavioural/BehaviouralContext';
+import { useSession } from '@/hooks/useSession';
+import { calculateEveNii } from '@/lib/api';
 import { runCalculation } from '@/lib/calculationEngine';
 import type { Position, YieldCurve, Scenario, CalculationResults } from '@/types/financial';
 import { DEFAULT_SCENARIOS, SAMPLE_YIELD_CURVE } from '@/types/financial';
@@ -39,14 +39,14 @@ import { Calculator, TrendingUp } from 'lucide-react';
 
 const Index = () => {
   // ─── Top-level application state ───────────────────────────────────────
-  // These are the 4 inputs needed for calculation + the result output.
-  // Each child card "owns" one input and reports changes via callbacks.
   const [positions, setPositions] = useState<Position[]>([]);
   const [curves, setCurves] = useState<YieldCurve[]>([]);
   const [selectedCurves, setSelectedCurves] = useState<string[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>(DEFAULT_SCENARIOS);
   const [results, setResults] = useState<CalculationResults | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+
+  const { sessionId } = useSession();
 
   // All 3 conditions must be met to enable the Calculate button.
   const canCalculate =
@@ -55,30 +55,62 @@ const Index = () => {
     scenarios.some((s) => s.enabled);
 
   // ─── Calculation handler ───────────────────────────────────────────────
-  // LIMITATION: This runs the SIMPLIFIED LOCAL engine (calculationEngine.ts).
-  // Phase 1 will replace this with: await calculateEveNii(sessionId, request)
-  // which calls POST /api/sessions/{id}/calculate on the backend.
-  const handleCalculate = useCallback(() => {
+  // Calls the backend /calculate endpoint when a session is available.
+  // Falls back to the local engine for demo/offline usage.
+  const handleCalculate = useCallback(async () => {
     if (!canCalculate) return;
-
-    // Fallback to sample curve if user hasn't uploaded real curves
-    const baseCurve = curves.length > 0 ? curves[0] : SAMPLE_YIELD_CURVE;
-    const discountCurve = baseCurve;
 
     setIsCalculating(true);
 
-    // setTimeout simulates async; will become a real await in Phase 1
-    setTimeout(() => {
-      const calculationResults = runCalculation(
-        positions,
-        baseCurve,
-        discountCurve,
-        scenarios
-      );
-      setResults(calculationResults);
+    try {
+      if (sessionId) {
+        // Backend calculation via ALMReady motor
+        const enabledScenarios = scenarios
+          .filter((s) => s.enabled)
+          .map((s) => s.id);
+
+        const response = await calculateEveNii(sessionId, {
+          scenarios: enabledScenarios,
+          discount_curve_id: selectedCurves[0] || "EUR_ESTR_OIS",
+        });
+
+        // Map backend snake_case → frontend camelCase CalculationResults
+        const calculationResults: CalculationResults = {
+          baseEve: response.base_eve,
+          baseNii: response.base_nii,
+          worstCaseEve: response.worst_case_eve,
+          worstCaseDeltaEve: response.worst_case_delta_eve,
+          worstCaseScenario: response.worst_case_scenario,
+          scenarioResults: response.scenario_results.map((sr) => ({
+            scenarioId: sr.scenario_id,
+            scenarioName: sr.scenario_name,
+            eve: sr.eve,
+            nii: sr.nii,
+            deltaEve: sr.delta_eve,
+            deltaNii: sr.delta_nii,
+          })),
+          calculatedAt: response.calculated_at,
+        };
+
+        setResults(calculationResults);
+      } else {
+        // Fallback: local calculation engine (demo/offline mode)
+        const baseCurve = curves.length > 0 ? curves[0] : SAMPLE_YIELD_CURVE;
+        const calculationResults = runCalculation(
+          positions,
+          baseCurve,
+          baseCurve,
+          scenarios
+        );
+        setResults(calculationResults);
+      }
+    } catch (err) {
+      console.error("Calculation failed:", err);
+      // TODO: show user-facing error toast
+    } finally {
       setIsCalculating(false);
-    }, 500);
-  }, [canCalculate, positions, curves, scenarios]);
+    }
+  }, [canCalculate, sessionId, positions, curves, selectedCurves, scenarios]);
 
   return (
     <BehaviouralProvider>
@@ -127,14 +159,16 @@ const Index = () => {
             <BalancePositionsCardConnected
               positions={positions}
               onPositionsChange={setPositions}
+              sessionId={sessionId}
             />
-            
+
             {/* Top-right: Curves & Scenarios (merged) */}
             <CurvesAndScenariosCard
               scenarios={scenarios}
               onScenariosChange={setScenarios}
               selectedCurves={selectedCurves}
               onSelectedCurvesChange={setSelectedCurves}
+              sessionId={sessionId}
             />
             
             {/* Bottom: Results (spans full width) */}

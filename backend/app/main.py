@@ -58,8 +58,10 @@ from pathlib import Path
 from typing import Any
 import json
 import re
+import shutil
 import unicodedata
 import uuid
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -262,6 +264,41 @@ class CurvePointsResponse(BaseModel):
     points: list[CurvePoint]
 
 
+class CalculateRequest(BaseModel):
+    """
+    Request body for the POST /api/sessions/{id}/calculate endpoint.
+    Triggers EVE/NII calculation via the ALMReady motor using previously
+    uploaded balance (ZIP/CSV) and curves data.
+    """
+    discount_curve_id: str = "EUR_ESTR_OIS"
+    scenarios: list[str] = Field(
+        default=["parallel-up", "parallel-down", "steepener", "flattener", "short-up", "short-down"],
+    )
+    analysis_date: str | None = None  # ISO date; defaults to today
+    currency: str = "EUR"
+    risk_free_index: str | None = None  # defaults to discount_curve_id
+
+
+class ScenarioResultItem(BaseModel):
+    scenario_id: str
+    scenario_name: str
+    eve: float
+    nii: float
+    delta_eve: float
+    delta_nii: float
+
+
+class CalculationResultsResponse(BaseModel):
+    session_id: str
+    base_eve: float
+    base_nii: float
+    worst_case_eve: float
+    worst_case_delta_eve: float
+    worst_case_scenario: str
+    scenario_results: list[ScenarioResultItem]
+    calculated_at: str
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # IN-MEMORY CACHE & DISK PATHS
 # Sessions are cached in-memory for fast lookups during a server lifecycle,
@@ -334,6 +371,25 @@ LIABILITY_SUBCATEGORY_ORDER = [
     "other-liabilities",
 ]
 
+# ── ZIP/CSV flow: motor source_contract_type → UI labels ──────────────────────
+# These map the motor's source_contract_type to human-readable labels used as
+# subcategoria_ui and group in the UI balance tree when data comes via ZIP upload.
+_CONTRACT_TYPE_LABELS = {
+    "fixed_annuity": "Fixed Annuity",
+    "fixed_bullet": "Fixed Bullet",
+    "fixed_linear": "Fixed Linear",
+    "fixed_non_maturity": "Non-Maturity (Fixed)",
+    "fixed_scheduled": "Fixed Scheduled",
+    "variable_annuity": "Variable Annuity",
+    "variable_bullet": "Variable Bullet",
+    "variable_linear": "Variable Linear",
+    "variable_non_maturity": "Non-Maturity (Variable)",
+    "variable_scheduled": "Variable Scheduled",
+}
+
+# Contract types excluded from ZIP processing per user requirement.
+_EXCLUDED_CONTRACT_TYPES = {"fixed_scheduled", "variable_scheduled"}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PATH HELPERS
@@ -356,6 +412,10 @@ def _positions_path(session_id: str) -> Path:
 
 def _summary_path(session_id: str) -> Path:
     return _session_dir(session_id) / "balance_summary.json"
+
+
+def _motor_positions_path(session_id: str) -> Path:
+    return _session_dir(session_id) / "motor_positions.json"
 
 
 def _curves_summary_path(session_id: str) -> Path:
@@ -849,6 +909,100 @@ def _canonicalize_position_row(sheet_name: str, record: dict[str, Any], idx: int
     }
 
 
+def _canonicalize_motor_row(record: dict[str, Any], idx: int) -> dict[str, Any]:
+    """
+    Transform one motor-canonical row (from load_positions_from_specs) into a
+    UI-canonical position dict.  This parallels _canonicalize_position_row() but
+    works with the motor's schema (contract_id, notional, side=A/L, rate_type=
+    fixed/float, source_contract_type, etc.) instead of the Excel schema.
+
+    Key differences from the Excel path:
+    - side comes as "A"/"L" instead of "asset"/"liability"
+    - subcategory is derived from source_contract_type, not subcategoria_ui column
+    - group is set to the contract-type label (no Producto column available)
+    - currency defaults to "EUR" (unicaja-specific; parameterize later)
+    - motor-specific fields (daycount_base, repricing_freq, etc.) are preserved
+      for the calculation endpoint
+    """
+    contract_id = str(record.get("contract_id") or f"motor-{idx + 1}")
+    source_contract_type = str(record.get("source_contract_type") or "unknown")
+
+    # Motor side: "A" → "asset", "L" → "liability"
+    raw_side = str(record.get("side") or "A").upper()
+    side = "asset" if raw_side == "A" else ("liability" if raw_side == "L" else "asset")
+
+    categoria_ui = "Assets" if side == "asset" else "Liabilities"
+    subcategoria_ui = _CONTRACT_TYPE_LABELS.get(
+        source_contract_type,
+        source_contract_type.replace("_", " ").title(),
+    )
+    subcategory_id = _slugify(subcategoria_ui)
+
+    amount = _to_float(record.get("notional")) or 0.0
+
+    # Rate info
+    rate_type_raw = str(record.get("rate_type") or "")
+    rate_type = (
+        "Fixed" if rate_type_raw == "fixed"
+        else "Floating" if rate_type_raw == "float"
+        else None
+    )
+    fixed_rate = _to_float(record.get("fixed_rate"))
+    spread_val = _to_float(record.get("spread"))
+    rate_display = fixed_rate  # same logic as _rate_display
+
+    # Dates – motor rows may contain datetime.date objects or ISO strings
+    fecha_inicio = _to_iso_date(record.get("start_date"))
+    fecha_vencimiento = _to_iso_date(record.get("maturity_date"))
+    fecha_prox_reprecio = _to_iso_date(record.get("next_reprice_date"))
+
+    # Maturity
+    mat_years = _maturity_years(fecha_vencimiento, None)
+    is_non_maturity = "non_maturity" in source_contract_type
+    if is_non_maturity:
+        mat_years = 0.0
+
+    maturity_bucket = _bucket_from_years(mat_years)
+    if is_non_maturity:
+        maturity_bucket = "<1Y"
+
+    return {
+        "contract_id": contract_id,
+        "sheet": source_contract_type,
+        "side": side,
+        "categoria_ui": categoria_ui,
+        "subcategoria_ui": subcategoria_ui,
+        "subcategory_id": subcategory_id,
+        "group": subcategoria_ui,
+        "currency": "EUR",
+        "counterparty": None,
+        "amount": amount,
+        "book_value": None,
+        "rate_type": rate_type,
+        "rate_display": rate_display,
+        "tipo_tasa_raw": rate_type_raw,
+        "tasa_fija": fixed_rate,
+        "spread": spread_val,
+        "indice_ref": _to_text(record.get("index_name")),
+        "tenor_indice": None,
+        "fecha_inicio": fecha_inicio,
+        "fecha_vencimiento": fecha_vencimiento,
+        "fecha_prox_reprecio": fecha_prox_reprecio,
+        "maturity_years": mat_years,
+        "maturity_bucket": maturity_bucket,
+        "repricing_bucket": None,
+        "include_in_balance_tree": True,
+        # Motor-specific fields preserved for /calculate endpoint
+        "source_contract_type": source_contract_type,
+        "daycount_base": _to_text(record.get("daycount_base")),
+        "notional": amount,
+        "repricing_freq": _to_text(record.get("repricing_freq")),
+        "payment_freq": _to_text(record.get("payment_freq")),
+        "floor_rate": _to_float(record.get("floor_rate")),
+        "cap_rate": _to_float(record.get("cap_rate")),
+    }
+
+
 def _validate_base_sheet_columns(sheet_name: str, df: pd.DataFrame) -> None:
     normalized = {_norm_key(c) for c in df.columns}
     missing = sorted(BASE_REQUIRED_COLS - normalized)
@@ -1030,6 +1184,110 @@ def _parse_workbook(xlsx_path: Path) -> tuple[list[BalanceSheetSummary], dict[st
         records = df.to_dict(orient="records")
         for idx, rec in enumerate(records):
             canonical_rows.append(_canonicalize_position_row(sheet_name, rec, idx))
+
+    return sheet_summaries, sample_rows, canonical_rows
+
+
+def _parse_zip_balance(
+    session_id: str,
+    zip_path: Path,
+) -> tuple[list[BalanceSheetSummary], dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """
+    Parse a ZIP of CSV balance files using the ALMReady motor pipeline.
+
+    Steps:
+    1. Extract ZIP to session_dir/balance_csvs/
+    2. Call load_positions_from_specs() with bank_mapping_unicaja
+       (scheduled types excluded per user requirement)
+    3. Persist raw motor DataFrame as motor_positions.json for /calculate
+    4. Build UI-canonical rows via _canonicalize_motor_row()
+    5. Return (sheet_summaries, sample_rows, canonical_rows) matching
+       the same contract as _parse_workbook() so the rest of the pipeline
+       (tree building, persistence, filtering) works unchanged.
+    """
+    from almready.config import bank_mapping_unicaja
+    from almready.io.positions_pipeline import load_positions_from_specs
+
+    sdir = _session_dir(session_id)
+
+    # ── 1. Extract ZIP ────────────────────────────────────────────────────────
+    extract_dir = sdir / "balance_csvs"
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True)
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+
+    # Handle ZIPs where CSVs sit inside a single subfolder
+    csv_files = list(extract_dir.glob("*.csv"))
+    if not csv_files:
+        subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+        if len(subdirs) == 1:
+            extract_dir = subdirs[0]
+
+    # ── 2. Run motor pipeline ─────────────────────────────────────────────────
+    # Filter out scheduled contract types and make all specs non-required
+    # (the ZIP may not contain every type).
+    filtered_specs = [
+        {**spec, "required": False}
+        for spec in bank_mapping_unicaja.SOURCE_SPECS
+        if spec.get("source_contract_type") not in _EXCLUDED_CONTRACT_TYPES
+    ]
+
+    try:
+        motor_df = load_positions_from_specs(
+            root_path=extract_dir,
+            mapping_module=bank_mapping_unicaja,
+            source_specs=filtered_specs,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error parsing CSV positions: {exc}",
+        )
+
+    # ── 3. Persist motor DataFrame for /calculate endpoint ────────────────────
+    motor_records = motor_df.to_dict(orient="records")
+    for rec in motor_records:
+        for key, val in list(rec.items()):
+            rec[key] = _serialize_value_for_json(val)
+
+    _motor_positions_path(session_id).write_text(
+        json.dumps(motor_records, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    # ── 4. Build UI-canonical rows ────────────────────────────────────────────
+    canonical_rows: list[dict[str, Any]] = []
+    for idx, rec in enumerate(motor_records):
+        canonical_rows.append(_canonicalize_motor_row(rec, idx))
+
+    # ── 5. Build sheet summaries (one per contract type present) ──────────────
+    contract_types = sorted({
+        str(rec.get("source_contract_type", "unknown")) for rec in motor_records
+    })
+
+    sheet_summaries: list[BalanceSheetSummary] = []
+    sample_rows: dict[str, list[dict[str, Any]]] = {}
+
+    for ct in contract_types:
+        ct_rows = [r for r in canonical_rows if r.get("sheet") == ct]
+        sheet_summaries.append(
+            BalanceSheetSummary(
+                sheet=ct,
+                rows=len(ct_rows),
+                columns=list(ct_rows[0].keys()) if ct_rows else [],
+                total_saldo_ini=sum(r.get("amount", 0) for r in ct_rows),
+            )
+        )
+        sample_rows[ct] = [
+            {k: _serialize_value_for_json(v) for k, v in r.items()}
+            for r in ct_rows[:3]
+        ]
 
     return sheet_summaries, sample_rows, canonical_rows
 
@@ -1232,6 +1490,94 @@ def _load_or_rebuild_curve_points(session_id: str) -> dict[str, list[CurvePoint]
         curve_id: [CurvePoint(**point) for point in points]
         for curve_id, points in payload.items()
     }
+
+
+def _build_forward_curve_set(
+    session_id: str,
+    analysis_date: date,
+    curve_base: str = "ACT/365",
+) -> Any:
+    """
+    Convert the backend's stored curve points (CurvePoint: tenor, t_years, rate)
+    into the motor's ForwardCurveSet format with a long-format DataFrame having
+    columns: IndexName, Tenor, FwdRate, TenorDate, YearFrac.
+    """
+    from almready.core.curves import curve_from_long_df
+    from almready.core.tenors import add_tenor
+    from almready.services.market import ForwardCurveSet as MotorForwardCurveSet
+
+    points_by_curve = _load_or_rebuild_curve_points(session_id)
+    if not points_by_curve:
+        raise HTTPException(status_code=404, detail="No curves uploaded for this session yet")
+
+    rows: list[dict[str, Any]] = []
+    for curve_id, points in points_by_curve.items():
+        for pt in points:
+            try:
+                tenor_date = add_tenor(analysis_date, pt.tenor)
+            except Exception:
+                from datetime import timedelta
+                tenor_date = analysis_date + timedelta(days=round(pt.t_years * 365.25))
+
+            rows.append({
+                "IndexName": curve_id,
+                "Tenor": pt.tenor,
+                "FwdRate": pt.rate,
+                "TenorDate": tenor_date,
+                "YearFrac": pt.t_years,
+            })
+
+    df_long = pd.DataFrame(rows)
+
+    index_names = sorted(df_long["IndexName"].unique().tolist())
+    curves = {}
+    for ix in index_names:
+        curves[ix] = curve_from_long_df(df_long, ix)
+
+    return MotorForwardCurveSet(
+        analysis_date=analysis_date,
+        base=curve_base,
+        points=df_long,
+        curves=curves,
+    )
+
+
+def _reconstruct_motor_dataframe(session_id: str) -> pd.DataFrame:
+    """
+    Reconstruct the motor positions DataFrame from the persisted motor_positions.json.
+    Converts ISO date strings back to datetime.date objects and restores proper dtypes.
+    """
+    motor_path = _motor_positions_path(session_id)
+    if not motor_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No motor positions found. Upload a balance ZIP first.",
+        )
+
+    records = json.loads(motor_path.read_text(encoding="utf-8"))
+    if not records:
+        raise HTTPException(status_code=400, detail="Motor positions file is empty")
+
+    df = pd.DataFrame(records)
+
+    # Convert ISO date strings back to date objects
+    date_cols = ["start_date", "maturity_date", "next_reprice_date"]
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+            df[col] = df[col].where(df[col].notna(), other=None)
+
+    # Ensure numeric columns are float
+    numeric_cols = ["notional", "fixed_rate", "spread", "floor_rate", "cap_rate"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+
+def _results_path(session_id: str) -> Path:
+    return _session_dir(session_id) / "calculation_results.json"
 
 
 def _persist_balance_payload(session_id: str, response: BalanceUploadResponse, canonical_rows: list[dict[str, Any]]) -> None:
@@ -1538,10 +1884,9 @@ def _aggregate_totals(rows: list[dict[str, Any]]) -> BalanceDetailsTotals:
 #   GET  /api/sessions/{id}/curves/summary          → Get curves catalog
 #   GET  /api/sessions/{id}/curves/{curve_id}       → Get points for one curve
 #
-# FUTURE endpoints (Phase 1 integration):
-#   POST /api/sessions/{id}/calculate               → Run EVE/NII via external engine
-#   GET  /api/sessions/{id}/results                 → Retrieve cached calculation results
 #   POST /api/sessions/{id}/balance/zip             → Upload ZIP of CSVs by flow type
+#   POST /api/sessions/{id}/calculate               → Run EVE/NII via motor engine
+#   GET  /api/sessions/{id}/results                 → Retrieve cached calculation results
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -1621,6 +1966,212 @@ async def upload_balance(session_id: str, file: UploadFile = File(...)) -> Balan
     xlsx_path.write_bytes(content)
 
     return _parse_and_store_balance(session_id, filename=safe_filename, xlsx_path=xlsx_path)
+
+
+@app.post("/api/sessions/{session_id}/balance/zip", response_model=BalanceUploadResponse)
+async def upload_balance_zip(session_id: str, file: UploadFile = File(...)) -> BalanceUploadResponse:
+    """
+    Upload a ZIP containing CSV files in the ALMReady motor format (e.g.
+    "Fixed annuity.csv", "Variable bullet.csv", etc.).
+
+    The CSVs are parsed via the motor's load_positions_from_specs() pipeline
+    using bank_mapping_unicaja.  The raw motor data is persisted as
+    motor_positions.json for the /calculate endpoint, and UI-enriched
+    canonical rows are persisted as balance_positions.json for the balance
+    tree, filters, contracts search, and View Details.
+    """
+    _assert_session_exists(session_id)
+
+    raw_filename = file.filename or "balance.zip"
+    if not raw_filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported for this endpoint")
+
+    safe_filename = Path(raw_filename).name
+    sdir = _session_dir(session_id)
+    zip_path = sdir / f"balance__{safe_filename}"
+    content = await file.read()
+    zip_path.write_bytes(content)
+
+    sheet_summaries, sample_rows, canonical_rows = _parse_zip_balance(session_id, zip_path)
+
+    summary_tree = _build_summary_tree(canonical_rows)
+    response = BalanceUploadResponse(
+        session_id=session_id,
+        filename=safe_filename,
+        uploaded_at=datetime.now(timezone.utc).isoformat(),
+        sheets=sheet_summaries,
+        sample_rows=sample_rows,
+        summary_tree=summary_tree,
+    )
+
+    _persist_balance_payload(session_id, response, canonical_rows)
+    return response
+
+
+@app.post("/api/sessions/{session_id}/calculate", response_model=CalculationResultsResponse)
+def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResultsResponse:
+    """
+    Run EVE and NII calculations via the ALMReady motor.
+
+    Prerequisites:
+    - Balance must have been uploaded via /balance/zip (motor_positions.json must exist)
+    - Curves must have been uploaded via /curves (curves_points.json must exist)
+
+    The endpoint:
+    1. Reconstructs the motor positions DataFrame from motor_positions.json
+    2. Builds a ForwardCurveSet from stored curve points
+    3. Generates regulatory scenario curve sets (EU Reg 2024/856)
+    4. Runs EVE scenarios via run_eve_scenarios()
+    5. Runs NII scenarios via run_nii_12m_scenarios()
+    6. Maps results to the frontend's CalculationResults contract
+    7. Persists results as calculation_results.json
+    """
+    from almready.services.eve import run_eve_scenarios
+    from almready.services.nii import run_nii_12m_scenarios
+    from almready.services.regulatory_curves import build_regulatory_curve_sets
+
+    _assert_session_exists(session_id)
+
+    # ── 1. Determine analysis date ────────────────────────────────────────────
+    if req.analysis_date:
+        try:
+            analysis_date = date.fromisoformat(req.analysis_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid analysis_date: {req.analysis_date}")
+    else:
+        analysis_date = date.today()
+
+    risk_free_index = req.risk_free_index or req.discount_curve_id
+
+    # ── 2. Load motor positions ───────────────────────────────────────────────
+    motor_df = _reconstruct_motor_dataframe(session_id)
+
+    # ── 3. Build base ForwardCurveSet ─────────────────────────────────────────
+    try:
+        base_curve_set = _build_forward_curve_set(session_id, analysis_date)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error building curve set: {exc}")
+
+    # Validate that the discount curve exists
+    if req.discount_curve_id not in base_curve_set.curves:
+        available = base_curve_set.available_indices
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Discount curve '{req.discount_curve_id}' not found. "
+                f"Available: {available}"
+            ),
+        )
+
+    # ── 4. Build regulatory scenario curve sets ───────────────────────────────
+    try:
+        scenario_curve_sets = build_regulatory_curve_sets(
+            base_set=base_curve_set,
+            scenarios=req.scenarios,
+            risk_free_index=risk_free_index,
+            currency=req.currency,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error building scenario curves: {exc}",
+        )
+
+    # ── 5. Run EVE scenarios ──────────────────────────────────────────────────
+    try:
+        eve_result = run_eve_scenarios(
+            positions=motor_df,
+            base_discount_curve_set=base_curve_set,
+            scenario_discount_curve_sets=scenario_curve_sets,
+            base_projection_curve_set=base_curve_set,
+            scenario_projection_curve_sets=scenario_curve_sets,
+            discount_index=req.discount_curve_id,
+            method="exact",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"EVE calculation error: {exc}",
+        )
+
+    # ── 6. Run NII scenarios ──────────────────────────────────────────────────
+    try:
+        nii_result = run_nii_12m_scenarios(
+            positions=motor_df,
+            base_curve_set=base_curve_set,
+            scenario_curve_sets=scenario_curve_sets,
+            risk_free_index=risk_free_index,
+            balance_constant=True,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"NII calculation error: {exc}",
+        )
+
+    # ── 7. Map to frontend CalculationResults contract ────────────────────────
+    base_eve = eve_result.base_eve
+    base_nii = nii_result.base_nii_12m
+
+    scenario_items: list[ScenarioResultItem] = []
+    worst_eve = base_eve
+    worst_delta_eve = 0.0
+    worst_scenario_name = "base"
+
+    for scenario_name in req.scenarios:
+        sc_eve = eve_result.scenario_eve.get(scenario_name, base_eve)
+        sc_nii = nii_result.scenario_nii_12m.get(scenario_name, base_nii)
+        delta_eve = sc_eve - base_eve
+        delta_nii = sc_nii - base_nii
+
+        scenario_items.append(ScenarioResultItem(
+            scenario_id=scenario_name,
+            scenario_name=scenario_name,
+            eve=sc_eve,
+            nii=sc_nii,
+            delta_eve=delta_eve,
+            delta_nii=delta_nii,
+        ))
+
+        # Worst case = scenario with lowest EVE (most negative delta)
+        if sc_eve < worst_eve:
+            worst_eve = sc_eve
+            worst_delta_eve = delta_eve
+            worst_scenario_name = scenario_name
+
+    calculated_at = datetime.now(timezone.utc).isoformat()
+
+    response = CalculationResultsResponse(
+        session_id=session_id,
+        base_eve=base_eve,
+        base_nii=base_nii,
+        worst_case_eve=worst_eve,
+        worst_case_delta_eve=worst_delta_eve,
+        worst_case_scenario=worst_scenario_name,
+        scenario_results=scenario_items,
+        calculated_at=calculated_at,
+    )
+
+    # Persist for retrieval on page refresh
+    _results_path(session_id).write_text(
+        response.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    return response
+
+
+@app.get("/api/sessions/{session_id}/results", response_model=CalculationResultsResponse)
+def get_calculation_results(session_id: str) -> CalculationResultsResponse:
+    """Retrieve cached calculation results (persisted by /calculate)."""
+    _assert_session_exists(session_id)
+    results_file = _results_path(session_id)
+    if not results_file.exists():
+        raise HTTPException(status_code=404, detail="No calculation results yet. Run /calculate first.")
+    payload = json.loads(results_file.read_text(encoding="utf-8"))
+    return CalculationResultsResponse(**payload)
 
 
 @app.get("/api/sessions/{session_id}/balance/summary", response_model=BalanceUploadResponse)

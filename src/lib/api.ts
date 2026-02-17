@@ -202,6 +202,34 @@ export type BalanceContractsQuery = {
   limit?: number;
 };
 
+export type CalculateRequest = {
+  discount_curve_id?: string;
+  scenarios?: string[];
+  analysis_date?: string;
+  currency?: string;
+  risk_free_index?: string;
+};
+
+export type ScenarioResultItem = {
+  scenario_id: string;
+  scenario_name: string;
+  eve: number;
+  nii: number;
+  delta_eve: number;
+  delta_nii: number;
+};
+
+export type CalculationResultsResponse = {
+  session_id: string;
+  base_eve: number;
+  base_nii: number;
+  worst_case_eve: number;
+  worst_case_delta_eve: number;
+  worst_case_scenario: string;
+  scenario_results: ScenarioResultItem[];
+  calculated_at: string;
+};
+
 function appendListParam(qs: URLSearchParams, key: string, values?: string[]) {
   if (!values || values.length === 0) return;
   qs.set(key, values.join(","));
@@ -225,6 +253,16 @@ export async function uploadBalanceExcel(sessionId: string, file: File): Promise
 
   return http<BalanceSummaryResponse>(
     `/api/sessions/${encodeURIComponent(sessionId)}/balance`,
+    { method: "POST", body: fd }
+  );
+}
+
+export async function uploadBalanceZip(sessionId: string, file: File): Promise<BalanceSummaryResponse> {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+
+  return http<BalanceSummaryResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/balance/zip`,
     { method: "POST", body: fd }
   );
 }
@@ -294,4 +332,26 @@ export async function getBalanceContracts(
   const query = qs.toString();
   const path = `/api/sessions/${encodeURIComponent(sessionId)}/balance/contracts${query ? `?${query}` : ""}`;
   return http<BalanceContractsResponse>(path);
+}
+
+export async function calculateEveNii(
+  sessionId: string,
+  request?: CalculateRequest,
+): Promise<CalculationResultsResponse> {
+  return http<CalculationResultsResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/calculate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request ?? {}),
+    }
+  );
+}
+
+export async function getCalculationResults(
+  sessionId: string,
+): Promise<CalculationResultsResponse> {
+  return http<CalculationResultsResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/results`
+  );
 }

@@ -23,17 +23,17 @@ import { BalancePositionsCard } from "@/components/BalancePositionsCard";
 import {
   getBalanceSummary,
   uploadBalanceExcel,
+  uploadBalanceZip,
   type BalanceSummaryResponse,
 } from "@/lib/api";
 import { inferCategoryFromSheetName } from "@/lib/balanceUi";
 import { generateSamplePositionsCSV, parsePositionsCSV } from "@/lib/csvParser";
-import { clearSessionId, getOrCreateSessionId } from "@/lib/session";
-import { useSession } from "@/hooks/useSession";
 import type { Position } from "@/types/financial";
 
 interface BalancePositionsCardConnectedProps {
   positions: Position[];
   onPositionsChange: (positions: Position[]) => void;
+  sessionId: string | null;
 }
 
 const DEFAULT_MATURITY_DATE = "2030-12-31";
@@ -44,21 +44,16 @@ function isExcelFile(file: File): boolean {
   return lower.endsWith(".xlsx") || lower.endsWith(".xls");
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function isZipFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".zip");
 }
 
-function isStaleSessionError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes("session not found") ||
-    message.includes("unknown session") ||
-    message.includes("invalid session")
-  );
+function isBalanceFile(file: File): boolean {
+  return isExcelFile(file) || isZipFile(file);
 }
 
 function isNoBalanceUploadedError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return message.includes("no balance uploaded");
 }
 
@@ -77,11 +72,6 @@ function clearUploadedSessionMarker(): void {
 function isCurrentSessionKnownUploaded(sessionId: string | null): boolean {
   if (!sessionId) return false;
   return getUploadedSessionMarker() === sessionId;
-}
-
-function clearSessionState(): void {
-  clearSessionId();
-  clearUploadedSessionMarker();
 }
 
 function mapSummaryToPositions(summary: BalanceSummaryResponse): Position[] {
@@ -106,45 +96,14 @@ function mapSummaryToPositions(summary: BalanceSummaryResponse): Position[] {
 export function BalancePositionsCardConnected({
   positions,
   onPositionsChange,
+  sessionId,
 }: BalancePositionsCardConnectedProps) {
-  const { sessionId, loading } = useSession();
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [balanceSummary, setBalanceSummary] = useState<BalanceSummaryResponse | null>(null);
 
-  useEffect(() => {
-    if (sessionId) setActiveSessionId(sessionId);
-  }, [sessionId]);
-
-  const ensureSessionId = useCallback(async (): Promise<string> => {
-    if (activeSessionId) return activeSessionId;
-    const nextSessionId = await getOrCreateSessionId();
-    setActiveSessionId(nextSessionId);
-    return nextSessionId;
-  }, [activeSessionId]);
-
-  const withSessionRetry = useCallback(
-    async <T,>(request: (resolvedSessionId: string) => Promise<T>): Promise<T> => {
-      let resolvedSessionId = await ensureSessionId();
-
-      try {
-        return await request(resolvedSessionId);
-      } catch (error) {
-        if (!isStaleSessionError(error)) throw error;
-
-        clearSessionState();
-        resolvedSessionId = await getOrCreateSessionId();
-        setActiveSessionId(resolvedSessionId);
-        return request(resolvedSessionId);
-      }
-    },
-    [ensureSessionId]
-  );
-
   const refreshSummary = useCallback(async () => {
+    if (!sessionId) return;
     try {
-      const summary = await withSessionRetry((resolvedSessionId) =>
-        getBalanceSummary(resolvedSessionId)
-      );
+      const summary = await getBalanceSummary(sessionId);
       setUploadedSessionMarker(summary.session_id);
       setBalanceSummary(summary);
       onPositionsChange(mapSummaryToPositions(summary));
@@ -159,30 +118,33 @@ export function BalancePositionsCardConnected({
         error
       );
     }
-  }, [onPositionsChange, withSessionRetry]);
+  }, [onPositionsChange, sessionId]);
 
   useEffect(() => {
-    if (loading || positions.length > 0) return;
-    if (!isCurrentSessionKnownUploaded(activeSessionId)) return;
+    if (positions.length > 0) return;
+    if (!isCurrentSessionKnownUploaded(sessionId)) return;
     void refreshSummary();
-  }, [activeSessionId, loading, positions.length, refreshSummary]);
+  }, [sessionId, positions.length, refreshSummary]);
 
-  const handleExcelUpload = useCallback(
+  const handleBalanceUpload = useCallback(
     async (file: File) => {
+      if (!sessionId) return;
       try {
-        await withSessionRetry(async (resolvedSessionId) => {
-          await uploadBalanceExcel(resolvedSessionId, file);
-          setUploadedSessionMarker(resolvedSessionId);
-        });
+        if (isZipFile(file)) {
+          await uploadBalanceZip(sessionId, file);
+        } else {
+          await uploadBalanceExcel(sessionId, file);
+        }
+        setUploadedSessionMarker(sessionId);
         await refreshSummary();
       } catch (error) {
         console.error(
-          "[BalancePositionsCardConnected] failed to upload Excel balance",
+          "[BalancePositionsCardConnected] failed to upload balance",
           error
         );
       }
     },
-    [refreshSummary, withSessionRetry]
+    [refreshSummary, sessionId]
   );
 
   const handleChangeCapture = useCallback(
@@ -191,25 +153,25 @@ export function BalancePositionsCardConnected({
       if (!(target instanceof HTMLInputElement) || target.type !== "file") return;
 
       const file = target.files?.[0];
-      if (!file || !isExcelFile(file)) return;
+      if (!file || !isBalanceFile(file)) return;
 
       event.preventDefault();
       event.stopPropagation();
       target.value = "";
-      void handleExcelUpload(file);
+      void handleBalanceUpload(file);
     },
-    [handleExcelUpload]
+    [handleBalanceUpload]
   );
 
   const handleDropCapture = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
       const file = event.dataTransfer.files?.[0];
-      if (!file || !isExcelFile(file)) return;
+      if (!file || !isBalanceFile(file)) return;
 
       event.preventDefault();
-      void handleExcelUpload(file);
+      void handleBalanceUpload(file);
     },
-    [handleExcelUpload]
+    [handleBalanceUpload]
   );
 
   const loadSampleIntoBalance = useCallback(() => {
@@ -250,7 +212,7 @@ export function BalancePositionsCardConnected({
       <BalancePositionsCard
         positions={positions}
         onPositionsChange={onPositionsChange}
-        sessionId={activeSessionId}
+        sessionId={sessionId}
         summaryTree={balanceSummary?.summary_tree ?? null}
       />
     </div>
