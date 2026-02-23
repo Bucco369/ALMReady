@@ -2,7 +2,7 @@
 Mapping Unicaja -> canonico ALMReady.
 
 Disenado para cargar automaticamente los CSV de:
-  inputs/positions/unicaja
+  tests/fixtures/positions/unicaja
 """
 
 from __future__ import annotations

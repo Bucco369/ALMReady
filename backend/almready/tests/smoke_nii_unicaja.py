@@ -26,7 +26,7 @@ def _parse_sheet(value: str) -> int | str:
 
 
 def _default_curve_file() -> Path:
-    curves_dir = _PROJECT_ROOT / "almready" / "inputs" / "curves" / "forwards"
+    curves_dir = _PROJECT_ROOT / "almready" / "tests" / "fixtures" / "curves" / "forwards"
     if not curves_dir.exists():
         return curves_dir / "curve_input.xlsx"
     matches = sorted(curves_dir.glob("*.xlsx"))
@@ -41,7 +41,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--positions-root",
-        default=str(_PROJECT_ROOT / "almready" / "inputs" / "positions" / "unicaja"),
+        default=str(_PROJECT_ROOT / "almready" / "tests" / "fixtures" / "positions" / "unicaja"),
         help="Ruta carpeta con CSV de posiciones Unicaja.",
     )
     parser.add_argument(
