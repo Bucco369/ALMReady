@@ -1,18 +1,19 @@
 /**
  * useSession – React hook that bootstraps the session on app mount.
  *
- * Returns { sessionId, loading, error }. While loading is true, child
- * components should show a loading state or skip API calls.
+ * Returns { sessionId, sessionMeta, loading, error }. While loading is true,
+ * child components should show a loading state or skip API calls.
  *
- * Used by BalancePositionsCardConnected to get the current session_id
- * before making any balance/curves API calls.
+ * sessionMeta includes has_balance / has_curves flags so components know
+ * whether to hydrate on mount without extra localStorage markers.
  */
 
 import { useEffect, useState } from "react";
-import { getOrCreateSessionId } from "../lib/session";
+import type { SessionMeta } from "../lib/api";
+import { getOrCreateSession } from "../lib/session";
 
 export function useSession() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -21,8 +22,8 @@ export function useSession() {
 
     (async () => {
       try {
-        const id = await getOrCreateSessionId();
-        if (!cancelled) setSessionId(id);
+        const meta = await getOrCreateSession();
+        if (!cancelled) setSessionMeta(meta);
       } catch (e) {
         if (!cancelled) setError(e as Error);
       } finally {
@@ -35,5 +36,10 @@ export function useSession() {
     };
   }, []);
 
-  return { sessionId, loading, error };
+  return {
+    sessionId: sessionMeta?.session_id ?? null,
+    sessionMeta,
+    loading,
+    error,
+  };
 }

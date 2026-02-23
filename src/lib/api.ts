@@ -54,7 +54,9 @@ function xhrUpload<T>(
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          onProgress(Math.round((e.loaded / e.total) * 80));
+          // XHR byte transfer = 0→5% (network transfer is fast for typical
+          // files; the real work happens server-side during parsing/persisting).
+          onProgress(Math.round((e.loaded / e.total) * 5));
         }
       };
     }
@@ -87,6 +89,8 @@ export type SessionMeta = {
   created_at: string;
   status: "active" | string;
   schema_version: string;
+  has_balance: boolean;
+  has_curves: boolean;
 };
 
 export type BalanceSheetSummary = {
@@ -283,12 +287,32 @@ export type WhatIfCalculateRequestBody = {
   modifications: WhatIfModificationRequest[];
 };
 
+export type WhatIfBucketDelta = {
+  scenario: string;
+  bucket_name: string;
+  bucket_start_years: number;
+  asset_pv_delta: number;
+  liability_pv_delta: number;
+};
+
+export type WhatIfMonthDelta = {
+  scenario: string;
+  month_index: number;
+  month_label: string;
+  income_delta: number;
+  expense_delta: number;
+};
+
 export type WhatIfResultsResponse = {
   session_id: string;
   base_eve_delta: number;
   worst_eve_delta: number;
   base_nii_delta: number;
   worst_nii_delta: number;
+  scenario_eve_deltas?: Record<string, number>;
+  scenario_nii_deltas?: Record<string, number>;
+  eve_bucket_deltas?: WhatIfBucketDelta[];
+  nii_month_deltas?: WhatIfMonthDelta[];
   calculated_at: string;
 };
 
@@ -366,6 +390,7 @@ export type UploadProgressResponse = {
   step: number;
   total: number;
   pct: number;
+  phase_label?: string;
 };
 
 export async function getUploadProgress(sessionId: string): Promise<UploadProgressResponse> {
@@ -374,8 +399,30 @@ export async function getUploadProgress(sessionId: string): Promise<UploadProgre
   );
 }
 
+export type CalcProgressResponse = {
+  phase: "idle" | "preparing" | "computing";
+  completed: number;
+  total: number;
+  pct: number;
+  phase_label: string;
+};
+
+export async function getCalcProgress(sessionId: string): Promise<CalcProgressResponse> {
+  return http<CalcProgressResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/calc-progress`
+  );
+}
+
 export async function getBalanceSummary(sessionId: string): Promise<BalanceSummaryResponse> {
   return http<BalanceSummaryResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/balance/summary`);
+}
+
+export async function deleteBalance(sessionId: string): Promise<void> {
+  await http<{ status: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/balance`, { method: "DELETE" });
+}
+
+export async function deleteCurves(sessionId: string): Promise<void> {
+  await http<{ status: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/curves`, { method: "DELETE" });
 }
 
 export async function uploadCurvesExcel(
@@ -478,5 +525,40 @@ export async function calculateWhatIf(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     }
+  );
+}
+
+// ── Chart data (per-bucket EVE + per-month NII) ────────────────────────────
+
+export type ChartBucketRow = {
+  scenario: string;
+  bucket_name: string;
+  bucket_start_years: number;
+  bucket_end_years: number | null;
+  asset_pv: number;
+  liability_pv: number;
+  net_pv: number;
+};
+
+export type ChartNiiMonthRow = {
+  scenario: string;
+  month_index: number;
+  month_label: string;
+  interest_income: number;
+  interest_expense: number;
+  net_nii: number;
+};
+
+export type ChartDataResponse = {
+  session_id: string;
+  eve_buckets: ChartBucketRow[];
+  nii_monthly: ChartNiiMonthRow[];
+};
+
+export async function getChartData(
+  sessionId: string,
+): Promise<ChartDataResponse> {
+  return http<ChartDataResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/results/chart-data`
   );
 }

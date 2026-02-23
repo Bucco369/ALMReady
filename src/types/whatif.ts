@@ -39,6 +39,10 @@ export interface WhatIfModification {
   repricingFreq?: string;         // For floating products
   refIndex?: string;              // Reference index for floating (e.g. 'EURIBOR 3M')
   spread?: number;                // Spread in bps for floating products
+  // Per-position maturity distribution for accurate chart tenor allocation.
+  // Used by bulk removals where many positions have different maturities.
+  // Frontend-only field — not sent to the backend.
+  maturityProfile?: Array<{ amount: number; maturityYears: number; rate?: number }>;
 }
 
 export interface ProductTemplate {

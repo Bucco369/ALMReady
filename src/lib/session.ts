@@ -20,23 +20,23 @@
  * survive restarts (which is already implemented in the backend).
  */
 
-import { createSession, getSession } from "./api";
+import { createSession, getSession, type SessionMeta } from "./api";
 
 const LS_KEY = "almready_session_id";
 
-async function createAndStoreSessionId(): Promise<string> {
+async function createAndStore(): Promise<SessionMeta> {
   const meta = await createSession();
   localStorage.setItem(LS_KEY, meta.session_id);
-  return meta.session_id;
+  return meta;
 }
 
-export async function getOrCreateSessionId(): Promise<string> {
+export async function getOrCreateSession(): Promise<SessionMeta> {
   const existing = localStorage.getItem(LS_KEY);
 
   if (existing) {
     try {
-      await getSession(existing);
-      return existing;
+      const meta = await getSession(existing);
+      return meta;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       const isSessionMissing = msg.includes("HTTP 404") || msg.includes("Session not found");
@@ -48,8 +48,13 @@ export async function getOrCreateSessionId(): Promise<string> {
     }
   }
 
-  const sessionId = await createAndStoreSessionId();
-  return sessionId;
+  return createAndStore();
+}
+
+/** @deprecated Use getOrCreateSession() instead */
+export async function getOrCreateSessionId(): Promise<string> {
+  const meta = await getOrCreateSession();
+  return meta.session_id;
 }
 
 export function clearSessionId() {

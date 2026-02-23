@@ -139,6 +139,150 @@ def _bucket_meta_table(buckets: list[EVEBucket]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def compute_eve_full(
+    cashflows: pd.DataFrame,
+    *,
+    discount_curve_set: ForwardCurveSet,
+    discount_index: str = "EUR_ESTR_OIS",
+    include_buckets: bool = False,
+    buckets: Sequence[EVEBucket | Mapping[str, Any]] | None = None,
+) -> tuple[float, list[dict[str, Any]] | None]:
+    """
+    Compute scalar EVE and (optionally) per-bucket breakdown from pre-built cashflows.
+
+    Returns (scalar_eve, bucket_list_or_None).
+    bucket_list entries: {scenario, bucket_order, bucket_name, bucket_start_years,
+    bucket_end_years, side_group, pv_interest, pv_principal, pv_total,
+    cashflow_total, flow_count}.
+    """
+    if cashflows.empty:
+        if not include_buckets:
+            return 0.0, None
+        norm_buckets = _normalise_buckets(buckets)
+        empty_rows: list[dict[str, Any]] = []
+        for i, b in enumerate(norm_buckets):
+            for sg in ("asset", "liability", "net"):
+                empty_rows.append({
+                    "bucket_order": i,
+                    "bucket_name": b.name,
+                    "bucket_start_years": float(b.start_years),
+                    "bucket_end_years": None if b.end_years is None else float(b.end_years),
+                    "side_group": sg,
+                    "pv_interest": 0.0, "pv_principal": 0.0, "pv_total": 0.0,
+                    "cashflow_total": 0.0, "flow_count": 0,
+                })
+        return 0.0, empty_rows
+
+    work = cashflows.copy()
+    work["flow_date"] = pd.to_datetime(work["flow_date"], errors="coerce").dt.date
+
+    # OPT-3: Cache discount factors by unique date (~2k unique vs ~76k total)
+    unique_dates = work["flow_date"].unique()
+    df_cache = {d: float(discount_curve_set.df_on_date(discount_index, d)) for d in unique_dates}
+    work["discount_factor"] = work["flow_date"].map(df_cache)
+    work["pv_total"] = work["total_amount"].astype(float) * work["discount_factor"]
+
+    # Scalar EVE = sum of all PVs
+    scalar_eve = float(work["pv_total"].sum())
+
+    if not include_buckets:
+        return scalar_eve, None
+
+    # Bucket breakdown
+    norm_buckets = _normalise_buckets(buckets)
+    bucket_meta = _bucket_meta_table(norm_buckets)
+    dc_base = normalizar_base_de_calculo(discount_curve_set.base)
+
+    # OPT-3: Cache yearfrac by unique date
+    tyears_cache = {d: max(0.0, float(yearfrac(discount_curve_set.analysis_date, d, dc_base))) for d in unique_dates}
+    work["t_years"] = work["flow_date"].map(tyears_cache)
+
+    # OPT-3: Vectorize bucket assignment with pd.cut instead of per-element apply
+    bucket_boundaries = [float(b.start_years) for b in norm_buckets] + [float("inf")]
+    bucket_labels = [b.name for b in norm_buckets]
+    work["bucket_name"] = pd.cut(
+        work["t_years"].astype(float), bins=bucket_boundaries, labels=bucket_labels, right=False,
+    )
+    work["side_group"] = [
+        _side_group(side_value=s, total_amount=a)
+        for s, a in zip(work["side"], work["total_amount"])
+    ]
+    work["pv_interest"] = work["interest_amount"].astype(float) * work["discount_factor"]
+    work["pv_principal"] = work["principal_amount"].astype(float) * work["discount_factor"]
+
+    grouped = (
+        work.groupby(["bucket_name", "side_group"], as_index=False)
+        .agg(
+            pv_interest=("pv_interest", "sum"),
+            pv_principal=("pv_principal", "sum"),
+            pv_total=("pv_total", "sum"),
+            cashflow_total=("total_amount", "sum"),
+            flow_count=("contract_id", "size"),
+        )
+    )
+    grouped_idx = grouped.set_index(["bucket_name", "side_group"])
+
+    full_rows: list[dict[str, Any]] = []
+    for _, b in bucket_meta.iterrows():
+        bname = str(b["bucket_name"])
+        for sg in ("asset", "liability"):
+            key = (bname, sg)
+            if key in grouped_idx.index:
+                g = grouped_idx.loc[key]
+                full_rows.append({
+                    "bucket_order": int(b["bucket_order"]),
+                    "bucket_name": bname,
+                    "bucket_start_years": float(b["bucket_start_years"]),
+                    "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
+                    "side_group": sg,
+                    "pv_interest": float(g["pv_interest"]),
+                    "pv_principal": float(g["pv_principal"]),
+                    "pv_total": float(g["pv_total"]),
+                    "cashflow_total": float(g["cashflow_total"]),
+                    "flow_count": int(g["flow_count"]),
+                })
+            else:
+                full_rows.append({
+                    "bucket_order": int(b["bucket_order"]),
+                    "bucket_name": bname,
+                    "bucket_start_years": float(b["bucket_start_years"]),
+                    "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
+                    "side_group": sg,
+                    "pv_interest": 0.0, "pv_principal": 0.0, "pv_total": 0.0,
+                    "cashflow_total": 0.0, "flow_count": 0,
+                })
+
+    # Add net rows
+    net_by_bucket: dict[str, dict[str, float]] = {}
+    for r in full_rows:
+        bname = r["bucket_name"]
+        if bname not in net_by_bucket:
+            net_by_bucket[bname] = {
+                "pv_interest": 0.0, "pv_principal": 0.0, "pv_total": 0.0,
+                "cashflow_total": 0.0, "flow_count": 0,
+            }
+        for k in ("pv_interest", "pv_principal", "pv_total", "cashflow_total", "flow_count"):
+            net_by_bucket[bname][k] += r[k]
+
+    for _, b in bucket_meta.iterrows():
+        bname = str(b["bucket_name"])
+        n = net_by_bucket.get(bname, {})
+        full_rows.append({
+            "bucket_order": int(b["bucket_order"]),
+            "bucket_name": bname,
+            "bucket_start_years": float(b["bucket_start_years"]),
+            "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
+            "side_group": "net",
+            "pv_interest": n.get("pv_interest", 0.0),
+            "pv_principal": n.get("pv_principal", 0.0),
+            "pv_total": n.get("pv_total", 0.0),
+            "cashflow_total": n.get("cashflow_total", 0.0),
+            "flow_count": n.get("flow_count", 0),
+        })
+
+    return scalar_eve, full_rows
+
+
 def build_eve_bucket_breakdown_exact(
     positions: pd.DataFrame,
     *,
@@ -199,7 +343,7 @@ def build_eve_bucket_breakdown_exact(
                             "bucket_order": int(b["bucket_order"]),
                             "bucket_name": str(b["bucket_name"]),
                             "bucket_start_years": float(b["bucket_start_years"]),
-                            "bucket_end_years": b["bucket_end_years"],
+                            "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
                             "side_group": side_group,
                             "pv_interest": 0.0,
                             "pv_principal": 0.0,
@@ -264,7 +408,7 @@ def build_eve_bucket_breakdown_exact(
                             "bucket_order": int(b["bucket_order"]),
                             "bucket_name": bname,
                             "bucket_start_years": float(b["bucket_start_years"]),
-                            "bucket_end_years": b["bucket_end_years"],
+                            "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
                             "side_group": side_group,
                             "pv_interest": float(g["pv_interest"]),
                             "pv_principal": float(g["pv_principal"]),
@@ -280,7 +424,7 @@ def build_eve_bucket_breakdown_exact(
                             "bucket_order": int(b["bucket_order"]),
                             "bucket_name": bname,
                             "bucket_start_years": float(b["bucket_start_years"]),
-                            "bucket_end_years": b["bucket_end_years"],
+                            "bucket_end_years": None if pd.isna(b["bucket_end_years"]) else float(b["bucket_end_years"]),
                             "side_group": side_group,
                             "pv_interest": 0.0,
                             "pv_principal": 0.0,

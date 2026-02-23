@@ -30,8 +30,9 @@ import { ResultsCard } from '@/components/ResultsCard';
 import { WhatIfProvider } from '@/components/whatif/WhatIfContext';
 import { BehaviouralProvider } from '@/components/behavioural/BehaviouralContext';
 import { useSession } from '@/hooks/useSession';
-import { calculateEveNii } from '@/lib/api';
+import { calculateEveNii, getCalcProgress } from '@/lib/api';
 import { runCalculation } from '@/lib/calculationEngine';
+import { useProgressETA } from '@/hooks/useProgressETA';
 import type { Position, YieldCurve, Scenario, CalculationResults } from '@/types/financial';
 import { DEFAULT_SCENARIOS, SAMPLE_YIELD_CURVE } from '@/types/financial';
 import { Button } from '@/components/ui/button';
@@ -46,9 +47,18 @@ const Index = () => {
   const [results, setResults] = useState<CalculationResults | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [calcProgress, setCalcProgress] = useState(0);
-  const calcTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [calcPhase, setCalcPhase] = useState('');
+  const calcPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const { sessionId } = useSession();
+  const { sessionId, sessionMeta } = useSession();
+
+  const calcEta = useProgressETA(calcProgress, isCalculating);
+
+  // Called by child components when balance or curves are deleted.
+  // Invalidates calculation results since they depend on the deleted data.
+  const handleDataReset = useCallback(() => {
+    setResults(null);
+  }, []);
 
   // All 3 conditions must be met to enable the Calculate button.
   const canCalculate =
@@ -62,36 +72,39 @@ const Index = () => {
   const handleCalculate = useCallback(async () => {
     if (!canCalculate) return;
 
-    // Compute enabled scenarios first so we can calibrate progress speed.
     const enabledScenarios = sessionId
       ? scenarios.filter((s) => s.enabled).map((s) => s.id)
       : [];
 
     setIsCalculating(true);
     setCalcProgress(0);
+    setCalcPhase('');
 
-    // Calibrated progress simulation: ~90s per scenario on a typical portfolio.
-    // Ramp reaches ≈85% at 80% of estimated total time, then creeps to 90% ceiling.
-    const numScenarios = Math.max(1, enabledScenarios.length);
-    const estimatedMs = numScenarios * 90_000; // 90 s per scenario
-    const targetTicks = (estimatedMs * 0.80) / 150; // ticks to hit ~85%
-    const decayRate = 3 / targetTicks; // exponential approach constant
+    // Clean up any leftover poll timer
+    if (calcPollRef.current) {
+      clearInterval(calcPollRef.current);
+      calcPollRef.current = null;
+    }
 
-    if (calcTimerRef.current) clearInterval(calcTimerRef.current);
-    calcTimerRef.current = setInterval(() => {
-      setCalcProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(calcTimerRef.current!);
-          return 90;
+    // Start polling backend for real-time calculation progress
+    if (sessionId) {
+      calcPollRef.current = setInterval(async () => {
+        try {
+          const p = await getCalcProgress(sessionId);
+          if (p.phase !== 'idle') {
+            // Monotonicity: never let progress decrease
+            setCalcProgress(prev => Math.max(prev, p.pct));
+            if (p.phase_label) setCalcPhase(p.phase_label);
+          }
+        } catch {
+          // Ignore transient poll errors
         }
-        return Math.min(90, prev + Math.max(0.005, (90 - prev) * decayRate));
-      });
-    }, 150);
+      }, 500);
+    }
 
     try {
       if (sessionId) {
         // Backend calculation via ALMReady motor
-
         const response = await calculateEveNii(sessionId, {
           scenarios: enabledScenarios,
           discount_curve_id: selectedCurves[0] || "EUR_ESTR_OIS",
@@ -131,8 +144,12 @@ const Index = () => {
       console.error("Calculation failed:", err);
       // TODO: show user-facing error toast
     } finally {
-      if (calcTimerRef.current) clearInterval(calcTimerRef.current);
+      if (calcPollRef.current) {
+        clearInterval(calcPollRef.current);
+        calcPollRef.current = null;
+      }
       setCalcProgress(100);
+      setCalcPhase('');
       // Brief pause at 100% before hiding the bar
       setTimeout(() => {
         setIsCalculating(false);
@@ -155,7 +172,7 @@ const Index = () => {
                 <p className="text-[11px] text-muted-foreground leading-tight">IRRBB Analysis Dashboard</p>
               </div>
             </div>
-            
+
             <div className="flex items-center gap-2.5">
               <Button
                 size="sm"
@@ -187,6 +204,8 @@ const Index = () => {
               positions={positions}
               onPositionsChange={setPositions}
               sessionId={sessionId}
+              hasBalance={sessionMeta?.has_balance ?? false}
+              onDataReset={handleDataReset}
             />
 
             {/* Top-right: Curves & Scenarios (merged) */}
@@ -196,14 +215,18 @@ const Index = () => {
               selectedCurves={selectedCurves}
               onSelectedCurvesChange={setSelectedCurves}
               sessionId={sessionId}
+              hasCurves={sessionMeta?.has_curves ?? false}
+              onDataReset={handleDataReset}
             />
-            
+
             {/* Bottom: Results (spans full width) */}
             <div className="col-span-2">
               <ResultsCard
                 results={results}
                 isCalculating={isCalculating}
                 calcProgress={calcProgress}
+                calcPhase={calcPhase}
+                calcEta={calcEta}
                 sessionId={sessionId}
                 scenarios={scenarios}
               />

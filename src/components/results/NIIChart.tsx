@@ -1,6 +1,11 @@
 /**
  * NIIChart.tsx – Dual-stack bar chart for Net Interest Income (NII).
  *
+ * === DATA SOURCE ===
+ * When `niiMonthly` prop is provided (from GET /results/chart-data), the chart
+ * uses REAL per-month income/expense data from the backend. When not available
+ * it shows a "Computing…" placeholder.
+ *
  * === VISUAL DESIGN ===
  * Same architecture as EVEChart but for 12 monthly projection buckets.
  * Scenario is controlled by the parent (ResultsCard) via props.
@@ -17,15 +22,10 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
+import { Loader2 } from 'lucide-react';
+import { differenceInCalendarMonths, differenceInDays, getDaysInMonth } from 'date-fns';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
-import { getCalendarLabelFromMonths } from '@/lib/calendarLabels';
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const MONTHS = Array.from({ length: 12 }, (_, i) => ({
-  label: `${i + 1}M`,
-  monthsToAdd: i + 1,
-}));
+import type { ChartNiiMonthRow, WhatIfMonthDelta } from '@/lib/api';
 
 // ─── Colours ─────────────────────────────────────────────────────────────────
 
@@ -42,71 +42,135 @@ const C = {
 
 const INSIDE_STROKE = 2.5;
 
+/** Scale factor: backend values are in absolute currency, display in Mln */
+const SCALE = 1e6;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Exact month difference using calendar math (date-fns). */
+function exactMonthDiff(from: Date, to: Date): number {
+  const wholeMonths = differenceInCalendarMonths(to, from);
+  const interim = new Date(from.getFullYear(), from.getMonth() + wholeMonths, from.getDate());
+  const remainingDays = differenceInDays(to, interim);
+  const daysInTargetMonth = getDaysInMonth(interim);
+  return wholeMonths + remainingDays / daysInTargetMonth;
+}
+
+function allocateNiiEntry(
+  perMonth: Array<{ dI: number; dE: number }>,
+  key: 'dI' | 'dE',
+  amount: number,
+  rate: number,
+  maturityYears: number | null,
+) {
+  if (rate === 0) return;
+  const monthlyInterest = amount * rate / 12;
+  const matMonths = maturityYears != null ? maturityYears * 12 : null;
+  const totalMonths = matMonths != null ? Math.min(matMonths, 12) : 12;
+  const wholeMonths = Math.floor(totalMonths);
+  const fraction = totalMonths - wholeMonths;
+  for (let m = 0; m < wholeMonths && m < 12; m++) {
+    perMonth[m][key] += monthlyInterest;
+  }
+  if (fraction > 0 && wholeMonths < 12) {
+    perMonth[wholeMonths][key] += monthlyInterest * fraction;
+  }
+}
 
 function allocateWhatIfByMonth(
   modifications: any[],
   analysisDate: Date | null,
 ): Array<{ dI: number; dE: number }> {
-  const perMonth = MONTHS.map(() => ({ dI: 0, dE: 0 }));
+  const perMonth = Array.from({ length: 12 }, () => ({ dI: 0, dE: 0 }));
 
   modifications.forEach((mod) => {
     const sign = mod.type === 'add' ? 1 : -1;
-    const notional = (mod.notional || 0) * sign;
-    const rate = mod.rate || (mod.spread ? mod.spread / 10000 : 0) || 0.03;
-    const monthlyInterest = notional * rate / 12;
-
     const key: 'dI' | 'dE' | null =
       mod.category === 'asset' ? 'dI' : mod.category === 'liability' ? 'dE' : null;
     if (!key) return;
 
-    let matMonths: number | null = null;
-    if (mod.maturityDate && analysisDate) {
-      const mat = new Date(mod.maturityDate);
-      matMonths =
-        (mat.getFullYear() - analysisDate.getFullYear()) * 12 +
-        (mat.getMonth() - analysisDate.getMonth()) +
-        (mat.getDate() - analysisDate.getDate()) / 30;
-      if (matMonths < 1) matMonths = 1;
-    } else if (mod.maturity != null) {
-      matMonths = mod.maturity * 12;
+    // If the modification carries a per-position maturity distribution,
+    // allocate each position's interest contribution to months individually.
+    if (mod.maturityProfile && mod.maturityProfile.length > 0) {
+      mod.maturityProfile.forEach((entry: { amount: number; maturityYears: number; rate?: number }) => {
+        const entryRate = entry.rate || mod.rate || mod.spread || 0;
+        allocateNiiEntry(perMonth, key, (entry.amount || 0) * sign, entryRate, entry.maturityYears);
+      });
+      return;
     }
 
-    const affectedMonths = matMonths != null ? Math.min(Math.ceil(matMonths), 12) : 12;
-    for (let m = 0; m < affectedMonths; m++) {
-      perMonth[m][key] += monthlyInterest;
+    // Single-position fallback
+    const notional = (mod.notional || 0) * sign;
+    const rate = mod.rate || mod.spread || 0;
+
+    let matYears: number | null = null;
+    if (mod.maturityDate && analysisDate) {
+      const matMonths = exactMonthDiff(analysisDate, new Date(mod.maturityDate));
+      matYears = Math.max(matMonths, 1) / 12;
+    } else if (mod.maturity != null) {
+      matYears = mod.maturity;
     }
+
+    allocateNiiEntry(perMonth, key, notional, rate, matYears);
   });
 
   return perMonth;
 }
 
-function generateNIIBaseline(scenario: string, analysisDate: Date | null) {
-  const getMultiplier = (sc: string, idx: number) => {
-    switch (sc) {
-      case 'parallel-up':   return 0.8;
-      case 'parallel-down': return -0.6;
-      case 'steepener':     return (idx / 12) * 0.7;
-      case 'flattener':     return ((12 - idx) / 12) * 0.6;
-      case 'short-up':      return idx < 4 ? 0.5 : 0.15;
-      case 'short-down':    return idx < 4 ? -0.4 : -0.1;
-      default:              return 0;
-    }
-  };
+interface MonthBaseline {
+  month: string;
+  monthLabel: string;
+  incomeBase: number;
+  expenseBase: number;
+  incomeScenario: number;
+  expenseScenario: number;
+}
 
-  return MONTHS.map((month, i) => {
-    const incomeBase  = 25 + Math.sin(i * 0.4) * 8 + i * 0.5;
-    const expenseBase = -(18 + Math.cos(i * 0.3) * 5 + i * 0.3);
-    const m = getMultiplier(scenario, i);
+function buildBaselineFromMonthly(
+  niiMonthly: ChartNiiMonthRow[],
+  scenarioId: string,
+): MonthBaseline[] {
+  const baseRows = niiMonthly.filter(r => r.scenario === 'base');
+  const scenarioRows = niiMonthly.filter(r => r.scenario === scenarioId);
+
+  // Get ordered unique months from base scenario
+  const seen = new Set<number>();
+  const orderedMonths: { index: number; label: string }[] = [];
+  for (const r of baseRows) {
+    if (!seen.has(r.month_index)) {
+      seen.add(r.month_index);
+      orderedMonths.push({ index: r.month_index, label: r.month_label });
+    }
+  }
+  orderedMonths.sort((a, b) => a.index - b.index);
+
+  // Build lookup maps
+  const baseMap = new Map<number, { income: number; expense: number }>();
+  for (const r of baseRows) {
+    baseMap.set(r.month_index, {
+      income: r.interest_income / SCALE,
+      expense: r.interest_expense / SCALE,
+    });
+  }
+
+  const scenarioMap = new Map<number, { income: number; expense: number }>();
+  for (const r of scenarioRows) {
+    scenarioMap.set(r.month_index, {
+      income: r.interest_income / SCALE,
+      expense: r.interest_expense / SCALE,
+    });
+  }
+
+  return orderedMonths.map(({ index, label }) => {
+    const base = baseMap.get(index) ?? { income: 0, expense: 0 };
+    const scen = scenarioMap.get(index) ?? base;
     return {
-      month: month.label,
-      calendarLabel: analysisDate
-        ? getCalendarLabelFromMonths(analysisDate, month.monthsToAdd)
-        : null,
-      incomeBase,
-      expenseBase,
-      incomeScenario:  incomeBase  + m * (3 + i * 0.3),
-      expenseScenario: expenseBase - m * (2 + i * 0.2),
+      month: `${index}M`,
+      monthLabel: label,
+      incomeBase: base.income,
+      expenseBase: base.expense,   // already negative from backend
+      incomeScenario: scen.income,
+      expenseScenario: scen.expense,
     };
   });
 }
@@ -125,22 +189,19 @@ function decomposeStack(A: number, L: number, dA: number, dL: number) {
 }
 
 function buildNiiChartData(
-  scenarioId: string,
+  baselines: MonthBaseline[],
   perMonthDeltas: Array<{ dI: number; dE: number }>,
-  analysisDate: Date | null,
 ) {
-  const baselines = generateNIIBaseline(scenarioId, analysisDate);
-
   return baselines.map((b, i) => {
-    const dA = perMonthDeltas[i].dI / 1e6;
-    const dL = -perMonthDeltas[i].dE / 1e6;
+    const dA = (perMonthDeltas[i]?.dI ?? 0) / SCALE;
+    const dL = -(perMonthDeltas[i]?.dE ?? 0) / SCALE;
 
     const base = decomposeStack(b.incomeBase, b.expenseBase, dA, dL);
     const scen = decomposeStack(b.incomeScenario, b.expenseScenario, dA, dL);
 
     return {
       month: b.month,
-      calendarLabel: b.calendarLabel,
+      monthLabel: b.monthLabel,
       ik_b: base.assets_kept, iri_b: base.assets_reduced_inside, iao_b: base.assets_added_outside,
       ek_b: base.liabs_kept,  eri_b: base.liabs_reduced_inside,  eao_b: base.liabs_added_outside,
       ik_s: scen.assets_kept, iri_s: scen.assets_reduced_inside, iao_s: scen.assets_added_outside,
@@ -206,20 +267,55 @@ interface NIIChartProps {
   analysisDate?: Date | null;
   selectedScenario: string;
   scenarioLabel: string;
+  niiMonthly?: ChartNiiMonthRow[];
+  chartDataLoading?: boolean;
+  whatIfMonthDeltas?: WhatIfMonthDelta[];
 }
 
-export function NIIChart({ className, fullWidth = false, analysisDate, selectedScenario, scenarioLabel }: NIIChartProps) {
+export function NIIChart({
+  className,
+  fullWidth = false,
+  analysisDate,
+  selectedScenario,
+  scenarioLabel,
+  niiMonthly,
+  chartDataLoading = false,
+  whatIfMonthDeltas,
+}: NIIChartProps) {
   const { modifications } = useWhatIf();
-
-  const perMonthDeltas = useMemo(
-    () => allocateWhatIfByMonth(modifications, analysisDate ?? null),
-    [modifications, analysisDate],
-  );
   const hasWhatIf = modifications.length > 0;
+  const hasRealData = niiMonthly && niiMonthly.length > 0;
+
+  const baselines = useMemo(
+    () => hasRealData ? buildBaselineFromMonthly(niiMonthly, selectedScenario) : [],
+    [niiMonthly, selectedScenario, hasRealData],
+  );
+
+  const effectiveAnalysisDate = analysisDate ?? new Date();
+
+  // Use backend-computed NII deltas when available (accurate, post-Apply),
+  // fall back to frontend approximation (preview, before Apply).
+  const perMonthDeltas = useMemo(() => {
+    if (whatIfMonthDeltas && whatIfMonthDeltas.length > 0 && baselines.length > 0) {
+      // Build lookup from month_index → { dI, dE } using base scenario data.
+      // expense_delta from backend is negative when adding expense (outgoing),
+      // but frontend convention is positive = adding. Negate to match.
+      const deltaMap = new Map<number, { dI: number; dE: number }>();
+      for (const d of whatIfMonthDeltas) {
+        if (d.scenario !== 'base') continue;
+        deltaMap.set(d.month_index, {
+          dI: d.income_delta,
+          dE: -d.expense_delta,
+        });
+      }
+      return baselines.map((_, i) => deltaMap.get(i + 1) ?? { dI: 0, dE: 0 });
+    }
+    return allocateWhatIfByMonth(modifications, effectiveAnalysisDate);
+  }, [whatIfMonthDeltas, modifications, effectiveAnalysisDate, baselines]);
 
   const chartData = useMemo(
-    () => buildNiiChartData(selectedScenario, perMonthDeltas, analysisDate ?? null),
-    [selectedScenario, perMonthDeltas, analysisDate],
+    () => hasRealData ? buildNiiChartData(baselines, perMonthDeltas) : [],
+    [baselines, perMonthDeltas, hasRealData],
   );
 
   const CustomXAxisTick = useCallback(({ x, y, payload }: any) => {
@@ -230,10 +326,10 @@ export function NIIChart({ className, fullWidth = false, analysisDate, selectedS
           fill="hsl(var(--muted-foreground))" fontSize={fullWidth ? 10 : 9} fontWeight={500}>
           {payload.value}
         </text>
-        {dp?.calendarLabel && (
+        {dp?.monthLabel && (
           <text x={0} y={0} dy={22} textAnchor="middle"
             fill="hsl(var(--muted-foreground))" fontSize={fullWidth ? 8 : 7} opacity={0.6}>
-            {dp.calendarLabel}
+            {dp.monthLabel}
           </text>
         )}
       </g>
@@ -254,8 +350,8 @@ export function NIIChart({ className, fullWidth = false, analysisDate, selectedS
       <div className="rounded-lg border border-border/40 bg-background/95 backdrop-blur-sm px-3 py-2 text-[11px] shadow-xl min-w-[190px]">
         <div className="font-semibold text-foreground mb-1.5 pb-1 border-b border-border/30">
           {label}
-          {dp.calendarLabel && (
-            <span className="text-muted-foreground font-normal ml-1.5">({dp.calendarLabel})</span>
+          {dp.monthLabel && (
+            <span className="text-muted-foreground font-normal ml-1.5">({dp.monthLabel})</span>
           )}
         </div>
         {sections.map((s, idx) => (
@@ -283,8 +379,6 @@ export function NIIChart({ className, fullWidth = false, analysisDate, selectedS
     );
   }, [chartData, hasWhatIf, scenarioLabel]);
 
-  const chartHeight = fullWidth ? 'h-[calc(100%-56px)]' : 'h-[180px]';
-
   const makeShape = (fill: string, stroke: string, sw: number, inset: boolean) => (props: any) => (
     <StyledBar {...props} fillColor={fill} strokeColor={stroke} sw={sw} inset={inset} />
   );
@@ -304,6 +398,28 @@ export function NIIChart({ className, fullWidth = false, analysisDate, selectedS
     { key: 'eao_s', sid: 'scenario', fill: C.whatIf,            stroke: C.whatIfStroke,     sw: 0, inset: false },
   ];
 
+  if (!hasRealData) {
+    return (
+      <div className={`h-full flex flex-col ${className ?? ''}`}>
+        <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+            Net Interest Income (NII)
+          </span>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          {chartDataLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Computing monthly breakdown...
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">Run calculation to see NII chart</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`h-full flex flex-col ${className ?? ''}`}>
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50">
@@ -316,7 +432,7 @@ export function NIIChart({ className, fullWidth = false, analysisDate, selectedS
         </span>
       </div>
 
-      <div className={`flex-1 px-1 ${fullWidth ? 'min-h-0' : chartHeight}`}>
+      <div className={`flex-1 px-1 ${fullWidth ? 'min-h-0' : 'h-[180px]'}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={chartData}

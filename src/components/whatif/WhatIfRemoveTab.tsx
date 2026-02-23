@@ -66,6 +66,7 @@ export function WhatIfRemoveTab({ sessionId, balanceTree }: WhatIfRemoveTabProps
   const [searchError, setSearchError] = useState<string | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedCategoryForDetails, setSelectedCategoryForDetails] = useState<string | null>(null);
+  const [removeAllLoading, setRemoveAllLoading] = useState<string | null>(null);
   const { addModification, modifications } = useWhatIf();
 
   const removeAllSubcategories = useMemo(() => {
@@ -177,9 +178,31 @@ export function WhatIfRemoveTab({ sessionId, balanceTree }: WhatIfRemoveTabProps
     });
   };
 
-  const handleRemoveNode = (node: RemoveTreeNode) => {
+  const handleRemoveNode = async (node: RemoveTreeNode) => {
     if (node.type !== 'subcategory') return;
     if (removeAllSubcategories.has(node.id)) return;
+
+    // Fetch per-contract maturity distribution for accurate chart allocation
+    let maturityProfile: Array<{ amount: number; maturityYears: number; rate?: number }> | undefined;
+    if (sessionId) {
+      setRemoveAllLoading(node.id);
+      try {
+        const resp = await getBalanceContracts(sessionId, {
+          subcategory_id: node.id,
+          page: 1,
+          page_size: 50_000,
+        });
+        maturityProfile = resp.contracts.map((c) => ({
+          amount: c.amount ?? 0,
+          maturityYears: c.maturity_years ?? 0,
+          rate: c.rate ?? undefined,
+        }));
+      } catch {
+        // Fall back to single avg maturity if fetch fails
+      } finally {
+        setRemoveAllLoading(null);
+      }
+    }
 
     addModification({
       type: 'remove',
@@ -192,6 +215,7 @@ export function WhatIfRemoveTab({ sessionId, balanceTree }: WhatIfRemoveTabProps
       rate: node.avgRate ?? undefined,
       maturity: node.avgMaturity ?? 0,
       positionDelta: node.count,
+      maturityProfile,
     });
   };
 
@@ -294,6 +318,7 @@ export function WhatIfRemoveTab({ sessionId, balanceTree }: WhatIfRemoveTabProps
                 depth={0}
                 expandedNodes={expandedNodes}
                 removeAllSubcategories={removeAllSubcategories}
+                removeAllLoading={removeAllLoading}
                 onToggle={toggleNode}
                 onRemove={handleRemoveNode}
                 onViewDetails={handleViewDetails}
@@ -324,6 +349,7 @@ interface TreeNodeProps {
   depth: number;
   expandedNodes: Set<string>;
   removeAllSubcategories: Set<string>;
+  removeAllLoading: string | null;
   onToggle: (id: string) => void;
   onRemove: (node: RemoveTreeNode) => void;
   onViewDetails: (node: RemoveTreeNode) => void;
@@ -334,6 +360,7 @@ function TreeNode({
   depth,
   expandedNodes,
   removeAllSubcategories,
+  removeAllLoading,
   onToggle,
   onRemove,
   onViewDetails,
@@ -342,6 +369,7 @@ function TreeNode({
   const hasChildren = Boolean(node.children && node.children.length > 0);
   const isLeaf = !hasChildren;
   const isLocked = isLeaf && removeAllSubcategories.has(node.id);
+  const isLoading = isLeaf && removeAllLoading === node.id;
 
   const isCategory = node.type === 'category';
   const labelColor = node.id === 'assets' ? 'text-success' : node.id === 'liabilities' ? 'text-destructive' : 'text-foreground';
@@ -407,14 +435,16 @@ function TreeNode({
           <Button
             variant="ghost"
             size="sm"
-            disabled={isLocked}
+            disabled={isLocked || isLoading}
             className="h-4 w-4 p-0 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive hover:bg-destructive/10 transition-opacity disabled:opacity-30"
             onClick={(e) => {
               e.stopPropagation();
               onRemove(node);
             }}
           >
-            <Minus className="h-2.5 w-2.5" />
+            {isLoading
+              ? <div className="h-2.5 w-2.5 animate-spin rounded-full border border-destructive border-t-transparent" />
+              : <Minus className="h-2.5 w-2.5" />}
           </Button>
         )}
       </div>
@@ -428,6 +458,7 @@ function TreeNode({
               depth={depth + 1}
               expandedNodes={expandedNodes}
               removeAllSubcategories={removeAllSubcategories}
+              removeAllLoading={removeAllLoading}
               onToggle={onToggle}
               onRemove={onRemove}
               onViewDetails={onViewDetails}

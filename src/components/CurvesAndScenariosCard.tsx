@@ -46,6 +46,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
 import type { Scenario } from '@/types/financial';
 import {
+  deleteCurves,
   getCurvePoints,
   getCurvesSummary,
   uploadCurvesExcel,
@@ -102,7 +103,6 @@ type ChartTooltipProps = {
   label?: number | string;
 };
 
-const CURVES_UPLOADED_SESSION_KEY = 'almready_curves_uploaded_session_id';
 const DEFAULT_CHART_MATURITY_YEARS = 25;
 const MIN_CHART_MATURITY_YEARS = 0.5;
 const MIN_Y_AXIS_PADDING_PERCENT = 0.05; // 5bp
@@ -297,18 +297,6 @@ function isNoCurvesUploadedError(error: unknown): boolean {
   return message.includes('no curves uploaded');
 }
 
-function getUploadedSessionMarker(): string | null {
-  return localStorage.getItem(CURVES_UPLOADED_SESSION_KEY);
-}
-
-function setUploadedSessionMarker(sessionId: string): void {
-  localStorage.setItem(CURVES_UPLOADED_SESSION_KEY, sessionId);
-}
-
-function clearUploadedSessionMarker(): void {
-  localStorage.removeItem(CURVES_UPLOADED_SESSION_KEY);
-}
-
 function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((value, idx) => value === b[idx]);
@@ -325,6 +313,8 @@ interface CurvesAndScenariosCardProps {
   selectedCurves: string[];
   onSelectedCurvesChange: (curves: string[]) => void;
   sessionId: string | null;
+  hasCurves: boolean;
+  onDataReset?: () => void;
 }
 
 export function CurvesAndScenariosCard({
@@ -333,6 +323,8 @@ export function CurvesAndScenariosCard({
   selectedCurves,
   onSelectedCurvesChange,
   sessionId,
+  hasCurves,
+  onDataReset,
 }: CurvesAndScenariosCardProps) {
   const { analysisDate } = useWhatIf();
   const [showDetails, setShowDetails] = useState(false);
@@ -475,11 +467,9 @@ export function CurvesAndScenariosCard({
     setIsRefreshingSummary(true);
     try {
       const summary = await getCurvesSummary(sessionId);
-      setUploadedSessionMarker(summary.session_id);
       await applyCurvesSummary(summary);
     } catch (error) {
       if (isNoCurvesUploadedError(error)) {
-        clearUploadedSessionMarker();
         setCurvesSummary(null);
         setCurvePointsById({});
         onSelectedCurvesChange([]);
@@ -497,14 +487,14 @@ export function CurvesAndScenariosCard({
   useEffect(() => {
     if (!sessionId) return;
 
-    if (getUploadedSessionMarker() === sessionId) {
+    if (hasCurves) {
       void refreshCurvesSummary();
     } else {
       setShowUploadDropzone(true);
       setCurvesSummary(null);
       setCurvePointsById({});
     }
-  }, [sessionId, refreshCurvesSummary]);
+  }, [sessionId, hasCurves, refreshCurvesSummary]);
 
   useEffect(() => {
     if (!showDetails) return;
@@ -582,7 +572,6 @@ export function CurvesAndScenariosCard({
       try {
         const summary = await uploadCurvesExcel(sessionId, file, (pct) => setUploadProgress(pct));
         setUploadProgress(100);
-        setUploadedSessionMarker(summary.session_id);
         await applyCurvesSummary(summary);
       } catch (error) {
         console.error('[CurvesAndScenariosCard] failed to upload curves file', error);
@@ -615,8 +604,21 @@ export function CurvesAndScenariosCard({
   );
 
   const handleWheelLoadClick = useCallback(() => {
+    // Clear all curves state
+    setCurvesSummary(null);
+    setCurvePointsById({});
+    onSelectedCurvesChange([]);
+    setChartCurves([]);
     setShowUploadDropzone(true);
-  }, []);
+    // Invalidate calculation results
+    onDataReset?.();
+    // Delete curves from backend
+    if (sessionId) {
+      deleteCurves(sessionId).catch((err) =>
+        console.error("[CurvesAndScenariosCard] deleteCurves failed", err)
+      );
+    }
+  }, [sessionId, onSelectedCurvesChange, onDataReset]);
   const handleDropzoneBrowseClick = useCallback(() => {
     dropzoneUploadInputRef.current?.click();
   }, []);

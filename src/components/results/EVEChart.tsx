@@ -1,19 +1,18 @@
 /**
  * EVEChart.tsx – Dual-stack bar chart for Economic Value of Equity (EVE).
  *
+ * === DATA SOURCE ===
+ * When `eveBuckets` prop is provided (from GET /results/chart-data), the chart
+ * uses REAL per-bucket PV data from the backend. When not available it shows a
+ * "Computing…" placeholder.
+ *
  * === VISUAL DESIGN ===
- * Each tenor bucket shows TWO side-by-side stacked bars:
+ * Each bucket shows TWO side-by-side stacked bars:
  *   - "Base" stack (lighter colours)
  *   - "Scenario" stack (darker colours) – whichever scenario is selected
  * Within each stack, assets grow upward (green) and liabilities grow
- * downward (red). What-If impact is rendered as amber segments:
- *   - Increase: amber "outside" the baseline (fill + stroke = amber)
- *   - Decrease: amber "inside" the baseline (fill = amber, stroke = original colour)
+ * downward (red). What-If impact is rendered as amber segments.
  * Two Net EV lines (base=light blue, scenario=dark blue) overlay the bars.
- *
- * === SCENARIO SELECTION ===
- * The scenario is controlled by the parent (ResultsCard) via the
- * `selectedScenario` prop. This chart has no internal scenario selector.
  */
 import { useMemo, useCallback } from 'react';
 import {
@@ -27,25 +26,10 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
+import { Loader2 } from 'lucide-react';
+import { differenceInCalendarMonths, differenceInDays, getDaysInMonth } from 'date-fns';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
-import { getCalendarLabelFromMonths } from '@/lib/calendarLabels';
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const TENORS = [
-  { label: '1M', months: 1 },
-  { label: '3M', months: 3 },
-  { label: '6M', months: 6 },
-  { label: '1Y', months: 12 },
-  { label: '2Y', months: 24 },
-  { label: '3Y', months: 36 },
-  { label: '5Y', months: 60 },
-  { label: '7Y', months: 84 },
-  { label: '10Y', months: 120 },
-  { label: '15Y', months: 180 },
-  { label: '20Y', months: 240 },
-  { label: '30Y', months: 360 },
-];
+import type { ChartBucketRow, WhatIfBucketDelta } from '@/lib/api';
 
 // ─── Colours ─────────────────────────────────────────────────────────────────
 
@@ -64,84 +48,77 @@ const INSIDE_STROKE = 2.5;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const TENOR_MONTHS = TENORS.map(t => t.months);
+/** Scale factor: backend PV is in absolute currency, display in Mln */
+const SCALE = 1e6;
 
-function allocateWhatIfByTenor(
+/** Exact month difference using calendar math (date-fns). */
+function exactMonthDiff(from: Date, to: Date): number {
+  const wholeMonths = differenceInCalendarMonths(to, from);
+  // Add fractional month based on remaining days
+  const interim = new Date(from.getFullYear(), from.getMonth() + wholeMonths, from.getDate());
+  const remainingDays = differenceInDays(to, interim);
+  const daysInTargetMonth = getDaysInMonth(interim);
+  return wholeMonths + remainingDays / daysInTargetMonth;
+}
+
+function findBucketIndex(matMonths: number, bucketMonths: number[]): number {
+  let idx = bucketMonths.length - 1;
+  for (let i = 0; i < bucketMonths.length - 1; i++) {
+    if (matMonths < bucketMonths[i + 1]) { idx = i; break; }
+  }
+  return idx;
+}
+
+function allocateWhatIfByBucket(
   modifications: any[],
   analysisDate: Date | null,
+  bucketNames: string[],
+  bucketStartYears: number[],
 ): Array<{ dA: number; dL: number }> {
-  const perTenor = TENORS.map(() => ({ dA: 0, dL: 0 }));
+  const perBucket = bucketNames.map(() => ({ dA: 0, dL: 0 }));
+  if (bucketNames.length === 0) return perBucket;
+
+  // Convert bucket start years to months for matching
+  const bucketMonths = bucketStartYears.map(y => y * 12);
 
   modifications.forEach((mod) => {
     const sign = mod.type === 'add' ? 1 : -1;
-    const notional = (mod.notional || 0) * sign;
     const key: 'dA' | 'dL' | null =
       mod.category === 'asset' ? 'dA' : mod.category === 'liability' ? 'dL' : null;
     if (!key) return;
 
+    // If the modification carries a per-position maturity distribution,
+    // allocate each position's amount to its correct bucket.
+    if (mod.maturityProfile && mod.maturityProfile.length > 0) {
+      mod.maturityProfile.forEach((entry: { amount: number; maturityYears: number }) => {
+        const amt = (entry.amount || 0) * sign;
+        const matMo = (entry.maturityYears || 0) * 12;
+        const idx = findBucketIndex(matMo, bucketMonths);
+        perBucket[idx][key] += amt;
+      });
+      return;
+    }
+
+    // Single-position fallback: place 100% in one bucket
+    const notional = (mod.notional || 0) * sign;
+
     let matMonths: number | null = null;
     if (mod.maturityDate && analysisDate) {
-      const mat = new Date(mod.maturityDate);
-      matMonths =
-        (mat.getFullYear() - analysisDate.getFullYear()) * 12 +
-        (mat.getMonth() - analysisDate.getMonth()) +
-        (mat.getDate() - analysisDate.getDate()) / 30;
+      matMonths = exactMonthDiff(analysisDate, new Date(mod.maturityDate));
       if (matMonths < 0) matMonths = 0;
     } else if (mod.maturity != null) {
       matMonths = mod.maturity * 12;
     }
 
     if (matMonths != null) {
-      if (matMonths <= TENOR_MONTHS[0]) {
-        perTenor[0][key] += notional;
-      } else if (matMonths >= TENOR_MONTHS[TENOR_MONTHS.length - 1]) {
-        perTenor[TENOR_MONTHS.length - 1][key] += notional;
-      } else {
-        for (let i = 0; i < TENOR_MONTHS.length - 1; i++) {
-          if (matMonths <= TENOR_MONTHS[i + 1]) {
-            const span = TENOR_MONTHS[i + 1] - TENOR_MONTHS[i];
-            const w = (matMonths - TENOR_MONTHS[i]) / span;
-            perTenor[i][key]     += notional * (1 - w);
-            perTenor[i + 1][key] += notional * w;
-            break;
-          }
-        }
-      }
+      perBucket[findBucketIndex(matMonths, bucketMonths)][key] += notional;
     } else {
-      const share = notional / TENORS.length;
-      perTenor.forEach(t => { t[key] += share; });
+      const share = notional / bucketNames.length;
+      perBucket.forEach(t => { t[key] += share; });
     }
   });
 
-  return perTenor;
-}
-
-function generateBaseline(scenario: string, analysisDate: Date | null) {
-  const getScenarioMultiplier = (sc: string, idx: number) => {
-    switch (sc) {
-      case 'parallel-up':   return 1.2;
-      case 'parallel-down': return -0.8;
-      case 'steepener':     return (idx / TENORS.length) * 1.5;
-      case 'flattener':     return ((TENORS.length - idx) / TENORS.length) * 1.2;
-      case 'short-up':      return idx < 4 ? 0.8 : 0.2;
-      case 'short-down':    return idx < 4 ? -0.6 : -0.1;
-      default:              return 0;
-    }
-  };
-
-  return TENORS.map((tenor, i) => {
-    const assetsBase = 80 + Math.sin(i * 0.5) * 30 + i * 5;
-    const liabsBase  = -(70 + Math.cos(i * 0.4) * 25 + i * 4);
-    const m = getScenarioMultiplier(scenario, i);
-    return {
-      tenor: tenor.label,
-      calendarLabel: analysisDate ? getCalendarLabelFromMonths(analysisDate, tenor.months) : null,
-      assetsBase,
-      liabsBase,
-      assetsScenario: assetsBase + m * (10 + i * 2),
-      liabsScenario:  liabsBase  - m * (8 + i * 1.5),
-    };
-  });
+  return perBucket;
 }
 
 function decomposeStack(A: number, L: number, dA: number, dL: number) {
@@ -157,30 +134,83 @@ function decomposeStack(A: number, L: number, dA: number, dL: number) {
   };
 }
 
-function buildEveChartData(
-  scenarioId: string,
-  perTenorDeltas: Array<{ dA: number; dL: number }>,
-  analysisDate: Date | null,
-) {
-  const baselines = generateBaseline(scenarioId, analysisDate);
+interface BucketBaseline {
+  bucket: string;
+  assetsBase: number;
+  liabsBase: number;
+  assetsScenario: number;
+  liabsScenario: number;
+}
 
+function buildBaselineFromBuckets(
+  eveBuckets: ChartBucketRow[],
+  scenarioId: string,
+): BucketBaseline[] {
+  // Group by bucket_name, preserve order by bucket_start_years
+  const baseBuckets = eveBuckets.filter(b => b.scenario === 'base');
+  const scenarioBuckets = eveBuckets.filter(b => b.scenario === scenarioId);
+
+  // Get ordered unique bucket names from base scenario
+  const seen = new Set<string>();
+  const orderedBuckets: { name: string; startYears: number }[] = [];
+  for (const b of baseBuckets) {
+    if (!seen.has(b.bucket_name)) {
+      seen.add(b.bucket_name);
+      orderedBuckets.push({ name: b.bucket_name, startYears: b.bucket_start_years });
+    }
+  }
+  orderedBuckets.sort((a, b) => a.startYears - b.startYears);
+
+  // Build lookup maps
+  const baseMap = new Map<string, { asset: number; liab: number }>();
+  for (const b of baseBuckets) {
+    const existing = baseMap.get(b.bucket_name) ?? { asset: 0, liab: 0 };
+    existing.asset = b.asset_pv / SCALE;
+    existing.liab = b.liability_pv / SCALE;
+    baseMap.set(b.bucket_name, existing);
+  }
+
+  const scenarioMap = new Map<string, { asset: number; liab: number }>();
+  for (const b of scenarioBuckets) {
+    const existing = scenarioMap.get(b.bucket_name) ?? { asset: 0, liab: 0 };
+    existing.asset = b.asset_pv / SCALE;
+    existing.liab = b.liability_pv / SCALE;
+    scenarioMap.set(b.bucket_name, existing);
+  }
+
+  return orderedBuckets.map(({ name }) => {
+    const base = baseMap.get(name) ?? { asset: 0, liab: 0 };
+    const scen = scenarioMap.get(name) ?? base;
+    return {
+      bucket: name,
+      assetsBase: base.asset,
+      liabsBase: base.liab,
+      assetsScenario: scen.asset,
+      liabsScenario: scen.liab,
+    };
+  });
+}
+
+function buildEveChartData(
+  baselines: BucketBaseline[],
+  perBucketDeltas: Array<{ dA: number; dL: number }>,
+) {
   return baselines.map((b, i) => {
-    const dA = perTenorDeltas[i].dA / 1e7;
-    const dL = -perTenorDeltas[i].dL / 1e7;
+    const dA = (perBucketDeltas[i]?.dA ?? 0) / SCALE;
+    const dL = -(perBucketDeltas[i]?.dL ?? 0) / SCALE;
 
     const base = decomposeStack(b.assetsBase, b.liabsBase, dA, dL);
     const scen = decomposeStack(b.assetsScenario, b.liabsScenario, dA, dL);
 
     return {
-      tenor: b.tenor,
-      calendarLabel: b.calendarLabel,
+      tenor: b.bucket,
       // Base stack
       ak_b: base.assets_kept, ari_b: base.assets_reduced_inside, aao_b: base.assets_added_outside,
       lk_b: base.liabs_kept,  lri_b: base.liabs_reduced_inside,  lao_b: base.liabs_added_outside,
       // Scenario stack
       ak_s: scen.assets_kept, ari_s: scen.assets_reduced_inside, aao_s: scen.assets_added_outside,
       lk_s: scen.liabs_kept,  lri_s: scen.liabs_reduced_inside,  lao_s: scen.liabs_added_outside,
-      // Net EV lines (post what-if)
+      // Net EV lines
       netBase:     (b.assetsBase     + dA) + (b.liabsBase     + dL),
       netScenario: (b.assetsScenario + dA) + (b.liabsScenario + dL),
       // Tooltip raw
@@ -243,39 +273,77 @@ interface EVEChartProps {
   analysisDate?: Date | null;
   selectedScenario: string;
   scenarioLabel: string;
+  eveBuckets?: ChartBucketRow[];
+  chartDataLoading?: boolean;
+  whatIfBucketDeltas?: WhatIfBucketDelta[];
 }
 
-export function EVEChart({ className, fullWidth = false, analysisDate, selectedScenario, scenarioLabel }: EVEChartProps) {
+export function EVEChart({
+  className,
+  fullWidth = false,
+  analysisDate,
+  selectedScenario,
+  scenarioLabel,
+  eveBuckets,
+  chartDataLoading = false,
+  whatIfBucketDeltas,
+}: EVEChartProps) {
   const { modifications } = useWhatIf();
-
-  const perTenorDeltas = useMemo(
-    () => allocateWhatIfByTenor(modifications, analysisDate ?? null),
-    [modifications, analysisDate],
-  );
   const hasWhatIf = modifications.length > 0;
+  const hasRealData = eveBuckets && eveBuckets.length > 0;
+
+  const baselines = useMemo(
+    () => hasRealData ? buildBaselineFromBuckets(eveBuckets, selectedScenario) : [],
+    [eveBuckets, selectedScenario, hasRealData],
+  );
+
+  const bucketStartYears = useMemo(
+    () => hasRealData
+      ? [...new Set(eveBuckets.filter(b => b.scenario === 'base').map(b => b.bucket_start_years))].sort((a, b) => a - b)
+      : [],
+    [eveBuckets, hasRealData],
+  );
+
+  const bucketNames = useMemo(() => baselines.map(b => b.bucket), [baselines]);
+
+  const effectiveAnalysisDate = analysisDate ?? new Date();
+
+  // Use backend-computed PV deltas when available (accurate, post-Apply),
+  // fall back to frontend approximation (preview, before Apply).
+  const perBucketDeltas = useMemo(() => {
+    if (whatIfBucketDeltas && whatIfBucketDeltas.length > 0 && bucketNames.length > 0) {
+      // Build lookup from bucket_name → { dA, dL } using base scenario PVs.
+      // liability_pv_delta from the backend is negative when adding liabilities
+      // (more negative PV), but the frontend convention is positive = adding.
+      // Negate to match (buildEveChartData negates again for display).
+      const deltaMap = new Map<string, { dA: number; dL: number }>();
+      for (const d of whatIfBucketDeltas) {
+        if (d.scenario !== 'base') continue;
+        deltaMap.set(d.bucket_name, {
+          dA: d.asset_pv_delta,
+          dL: -d.liability_pv_delta,
+        });
+      }
+      return bucketNames.map(name => deltaMap.get(name) ?? { dA: 0, dL: 0 });
+    }
+    return allocateWhatIfByBucket(modifications, effectiveAnalysisDate, bucketNames, bucketStartYears);
+  }, [whatIfBucketDeltas, modifications, effectiveAnalysisDate, bucketNames, bucketStartYears]);
 
   const chartData = useMemo(
-    () => buildEveChartData(selectedScenario, perTenorDeltas, analysisDate ?? null),
-    [selectedScenario, perTenorDeltas, analysisDate],
+    () => hasRealData ? buildEveChartData(baselines, perBucketDeltas) : [],
+    [baselines, perBucketDeltas, hasRealData],
   );
 
   const CustomXAxisTick = useCallback(({ x, y, payload }: any) => {
-    const dp = chartData.find((d) => d.tenor === payload.value);
     return (
       <g transform={`translate(${x},${y})`}>
         <text x={0} y={0} dy={10} textAnchor="middle"
           fill="hsl(var(--muted-foreground))" fontSize={fullWidth ? 10 : 9} fontWeight={500}>
           {payload.value}
         </text>
-        {dp?.calendarLabel && (
-          <text x={0} y={0} dy={22} textAnchor="middle"
-            fill="hsl(var(--muted-foreground))" fontSize={fullWidth ? 8 : 7} opacity={0.6}>
-            {dp.calendarLabel}
-          </text>
-        )}
       </g>
     );
-  }, [chartData, fullWidth]);
+  }, [fullWidth]);
 
   const CustomTooltip = useCallback(({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null;
@@ -291,9 +359,6 @@ export function EVEChart({ className, fullWidth = false, analysisDate, selectedS
       <div className="rounded-lg border border-border/40 bg-background/95 backdrop-blur-sm px-3 py-2 text-[11px] shadow-xl min-w-[190px]">
         <div className="font-semibold text-foreground mb-1.5 pb-1 border-b border-border/30">
           {label}
-          {dp.calendarLabel && (
-            <span className="text-muted-foreground font-normal ml-1.5">({dp.calendarLabel})</span>
-          )}
         </div>
         {sections.map((s, idx) => (
           <div key={s.tag} className={idx > 0 ? 'mt-1.5 pt-1.5 border-t border-border/20' : ''}>
@@ -320,21 +385,17 @@ export function EVEChart({ className, fullWidth = false, analysisDate, selectedS
     );
   }, [chartData, hasWhatIf, scenarioLabel]);
 
-  const chartHeight = fullWidth ? 'h-[calc(100%-56px)]' : 'h-[180px]';
-
   const makeShape = (fill: string, stroke: string, sw: number, inset: boolean) => (props: any) => (
     <StyledBar {...props} fillColor={fill} strokeColor={stroke} sw={sw} inset={inset} />
   );
 
   const barDefs = [
-    // BASE stack
     { key: 'ak_b',  sid: 'base',     fill: C.baseAsset,      stroke: C.baseAsset,      sw: 0, inset: false },
     { key: 'ari_b', sid: 'base',     fill: C.whatIf,          stroke: C.baseAsset,      sw: INSIDE_STROKE, inset: true },
     { key: 'aao_b', sid: 'base',     fill: C.whatIf,          stroke: C.whatIfStroke,    sw: 0, inset: false },
     { key: 'lk_b',  sid: 'base',     fill: C.baseLiab,        stroke: C.baseLiab,       sw: 0, inset: false },
     { key: 'lri_b', sid: 'base',     fill: C.whatIf,          stroke: C.baseLiab,       sw: INSIDE_STROKE, inset: true },
     { key: 'lao_b', sid: 'base',     fill: C.whatIf,          stroke: C.whatIfStroke,    sw: 0, inset: false },
-    // SCENARIO stack
     { key: 'ak_s',  sid: 'scenario', fill: C.scenarioAsset,   stroke: C.scenarioAsset,  sw: 0, inset: false },
     { key: 'ari_s', sid: 'scenario', fill: C.whatIf,           stroke: C.scenarioAsset,  sw: INSIDE_STROKE, inset: true },
     { key: 'aao_s', sid: 'scenario', fill: C.whatIf,           stroke: C.whatIfStroke,    sw: 0, inset: false },
@@ -342,6 +403,28 @@ export function EVEChart({ className, fullWidth = false, analysisDate, selectedS
     { key: 'lri_s', sid: 'scenario', fill: C.whatIf,           stroke: C.scenarioLiab,   sw: INSIDE_STROKE, inset: true },
     { key: 'lao_s', sid: 'scenario', fill: C.whatIf,           stroke: C.whatIfStroke,    sw: 0, inset: false },
   ];
+
+  if (!hasRealData) {
+    return (
+      <div className={`h-full flex flex-col ${className ?? ''}`}>
+        <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+            Economic Value (EVE)
+          </span>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          {chartDataLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Computing bucket breakdown...
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">Run calculation to see EVE chart</span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`h-full flex flex-col ${className ?? ''}`}>
@@ -357,7 +440,7 @@ export function EVEChart({ className, fullWidth = false, analysisDate, selectedS
       </div>
 
       {/* Chart */}
-      <div className={`flex-1 px-1 ${fullWidth ? 'min-h-0' : chartHeight}`}>
+      <div className={`flex-1 px-1 ${fullWidth ? 'min-h-0' : 'h-[180px]'}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={chartData}
@@ -387,7 +470,6 @@ export function EVEChart({ className, fullWidth = false, analysisDate, selectedS
                 isAnimationActive={false} />
             ))}
 
-            {/* Net EV lines */}
             <Line type="monotone" dataKey="netBase" stroke={C.netBase}
               strokeWidth={1.5} dot={{ r: 2.5, fill: C.netBase, strokeWidth: 0 }}
               activeDot={{ r: 3.5, strokeWidth: 0 }} isAnimationActive={false} />

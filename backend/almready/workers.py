@@ -21,6 +21,7 @@ def warmup() -> None:
     Called once per worker during server startup (lifespan).
     """
     import almready.services.eve          # noqa: F401
+    import almready.services.eve_analytics  # noqa: F401
     import almready.services.nii          # noqa: F401
     import almready.services.nii_projectors  # noqa: F401
 
@@ -65,3 +66,64 @@ def nii_base(
         horizon_months=horizon_months,
         variable_annuity_payment_mode=variable_annuity_payment_mode,
     )
+
+
+def eve_nii_unified(
+    positions: pd.DataFrame,
+    discount_curve_set,
+    projection_curve_set,
+    discount_index: str,
+    margin_set,
+    risk_free_index: str,
+    balance_constant: bool,
+    horizon_months: int,
+    scheduled_principal_flows=None,
+) -> dict:
+    """Unified worker: build cashflows ONCE, derive both EVE and NII.
+
+    Returns a serializable dict with:
+      eve_scalar, eve_buckets, nii_scalar, nii_asset, nii_liability, nii_monthly
+    """
+    from almready.services.eve import build_eve_cashflows
+    from almready.services.eve_analytics import compute_eve_full
+    from almready.services.nii import compute_nii_from_cashflows
+
+    analysis_date = discount_curve_set.analysis_date
+
+    # 1. Build cashflows ONCE
+    cashflows = build_eve_cashflows(
+        positions,
+        analysis_date=analysis_date,
+        projection_curve_set=projection_curve_set,
+        scheduled_principal_flows=scheduled_principal_flows,
+    )
+
+    # 2. EVE: scalar + bucket breakdown from the same cashflows
+    eve_scalar, eve_buckets = compute_eve_full(
+        cashflows,
+        discount_curve_set=discount_curve_set,
+        discount_index=discount_index,
+        include_buckets=True,
+    )
+
+    # 3. NII: aggregate + monthly from the same cashflows
+    nii_result = compute_nii_from_cashflows(
+        cashflows,
+        positions,
+        projection_curve_set,
+        analysis_date=analysis_date,
+        horizon_months=horizon_months,
+        balance_constant=balance_constant,
+        margin_set=margin_set,
+        risk_free_index=risk_free_index,
+        scheduled_principal_flows=scheduled_principal_flows,
+    )
+
+    return {
+        "eve_scalar": eve_scalar,
+        "eve_buckets": eve_buckets,
+        "nii_scalar": nii_result.aggregate_nii,
+        "nii_asset": nii_result.asset_nii,
+        "nii_liability": nii_result.liability_nii,
+        "nii_monthly": nii_result.monthly_breakdown,
+    }

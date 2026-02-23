@@ -122,10 +122,10 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Upload progress tracking (in-memory, per session).
-# Key = session_id, value = {"step": int, "total": int, "phase": str}
+# Progress tracking (in-memory, per session).
 # ---------------------------------------------------------------------------
 _upload_progress: dict[str, dict[str, Any]] = {}
+_calc_progress: dict[str, dict[str, Any]] = {}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # API MODELS (Pydantic v2)
@@ -143,6 +143,8 @@ class SessionMeta(BaseModel):
     created_at: str
     status: str = "active"
     schema_version: str = "v1"
+    has_balance: bool = False
+    has_curves: bool = False
 
 
 class BalanceSheetSummary(BaseModel):
@@ -364,6 +366,24 @@ class WhatIfCalculateRequest(BaseModel):
     modifications: list[WhatIfModificationItem]
 
 
+class WhatIfBucketDelta(BaseModel):
+    """Per-bucket PV delta from What-If modifications (asset/liability split)."""
+    scenario: str
+    bucket_name: str
+    bucket_start_years: float
+    asset_pv_delta: float
+    liability_pv_delta: float
+
+
+class WhatIfMonthDelta(BaseModel):
+    """Per-month NII delta from What-If modifications (income/expense split)."""
+    scenario: str
+    month_index: int
+    month_label: str
+    income_delta: float
+    expense_delta: float
+
+
 class WhatIfResultsResponse(BaseModel):
     """Impact of What-If modifications on EVE/NII metrics."""
     session_id: str
@@ -371,6 +391,12 @@ class WhatIfResultsResponse(BaseModel):
     worst_eve_delta: float
     base_nii_delta: float
     worst_nii_delta: float
+    # Per-scenario deltas so the frontend can show impact for any selected scenario
+    scenario_eve_deltas: dict[str, float] = {}
+    scenario_nii_deltas: dict[str, float] = {}
+    # Per-bucket EVE PV deltas and per-month NII deltas for chart visualization
+    eve_bucket_deltas: list[WhatIfBucketDelta] = []
+    nii_month_deltas: list[WhatIfMonthDelta] = []
     calculated_at: str
 
 
@@ -1297,10 +1323,14 @@ def _parse_zip_balance(
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file")
 
-    # Handle ZIPs where CSVs sit inside a single subfolder
+    # Handle ZIPs where CSVs sit inside a single subfolder.
+    # Filter out __MACOSX metadata dirs created by macOS Finder.
     csv_files = list(extract_dir.glob("*.csv"))
     if not csv_files:
-        subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+        subdirs = [
+            d for d in extract_dir.iterdir()
+            if d.is_dir() and d.name != "__MACOSX"
+        ]
         if len(subdirs) == 1:
             extract_dir = subdirs[0]
 
@@ -1335,12 +1365,14 @@ def _parse_zip_balance(
         )
 
     # ── 3. Persist motor DataFrame for /calculate endpoint ────────────────────
-    _upload_progress[session_id] = {"step": 0, "total": 0, "phase": "persisting"}
-
     motor_records = motor_df.to_dict(orient="records")
-    for rec in motor_records:
+    n_records = len(motor_records)
+    _upload_progress[session_id] = {"step": 0, "total": n_records, "phase": "persisting"}
+    for i, rec in enumerate(motor_records):
         for key, val in list(rec.items()):
             rec[key] = _serialize_value_for_json(val)
+        if i % 200 == 0:
+            _upload_progress[session_id]["step"] = i
 
     _motor_positions_path(session_id).write_text(
         json.dumps(motor_records, indent=2, ensure_ascii=False),
@@ -1348,7 +1380,7 @@ def _parse_zip_balance(
     )
 
     # ── 4. Build UI-canonical rows ────────────────────────────────────────────
-    _upload_progress[session_id] = {"step": 0, "total": 0, "phase": "canonicalizing"}
+    _upload_progress[session_id] = {"step": 0, "total": n_records, "phase": "canonicalizing"}
 
     # Load client classification rules once (not per row)
     client_rules = _bc_get_rules("unicaja")
@@ -1356,6 +1388,8 @@ def _parse_zip_balance(
     canonical_rows: list[dict[str, Any]] = []
     for idx, rec in enumerate(motor_records):
         canonical_rows.append(_canonicalize_motor_row(rec, idx, client_rules=client_rules))
+        if idx % 200 == 0:
+            _upload_progress[session_id]["step"] = idx
 
     # ── 5. Build sheet summaries (one per contract type present) ──────────────
     contract_types = sorted({
@@ -2024,7 +2058,58 @@ def create_session() -> SessionMeta:
 @app.get("/api/sessions/{session_id}", response_model=SessionMeta)
 def get_session(session_id: str) -> SessionMeta:
     _assert_session_exists(session_id)
-    return _get_session_meta(session_id)
+    meta = _get_session_meta(session_id)
+    meta.has_balance = _summary_path(session_id).exists()
+    meta.has_curves = _curves_summary_path(session_id).exists()
+    return meta
+
+
+@app.delete("/api/sessions/{session_id}/balance")
+def delete_balance(session_id: str) -> dict[str, str]:
+    """Delete all balance-related files for this session."""
+    _assert_session_exists(session_id)
+    sdir = _session_dir(session_id)
+    deleted: list[str] = []
+    # Remove known balance JSON files
+    for p in [_summary_path(session_id), _positions_path(session_id), _motor_positions_path(session_id)]:
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+    # Remove uploaded balance Excel/ZIP files (balance__*.xlsx etc.)
+    for p in sdir.iterdir():
+        if p.is_file() and p.name.startswith("balance__"):
+            p.unlink()
+            deleted.append(p.name)
+    # Remove cached calculation results (they depend on balance data)
+    for p in [_results_path(session_id), _calc_params_path(session_id)]:
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+    return {"status": "ok", "deleted": ", ".join(deleted) if deleted else "nothing to delete"}
+
+
+@app.delete("/api/sessions/{session_id}/curves")
+def delete_curves(session_id: str) -> dict[str, str]:
+    """Delete all curves-related files for this session."""
+    _assert_session_exists(session_id)
+    sdir = _session_dir(session_id)
+    deleted: list[str] = []
+    # Remove known curves JSON files
+    for p in [_curves_summary_path(session_id), _curves_points_path(session_id)]:
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+    # Remove uploaded curves Excel files (curves__*.xlsx etc.)
+    for p in sdir.iterdir():
+        if p.is_file() and p.name.startswith("curves__"):
+            p.unlink()
+            deleted.append(p.name)
+    # Remove cached calculation results (they depend on curves data)
+    for p in [_results_path(session_id), _calc_params_path(session_id)]:
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+    return {"status": "ok", "deleted": ", ".join(deleted) if deleted else "nothing to delete"}
 
 
 @app.post("/api/sessions/{session_id}/curves", response_model=CurvesSummaryResponse)
@@ -2127,26 +2212,73 @@ async def upload_balance_zip(session_id: str, file: UploadFile = File(...)) -> B
 def get_upload_progress(session_id: str):
     """
     Poll backend-side processing progress during balance upload.
-    Returns {"step", "total", "phase"} while processing, or
-    {"phase": "idle"} when no upload is in progress.
+    Returns {"step", "total", "phase", "pct", "phase_label"} while processing,
+    or {"phase": "idle"} when no upload is in progress.
+
+    Phase → percentage mapping (redistributed for uniform feel):
+      parsing:        5 → 70%   (main work, granular step/total)
+      persisting:    70 → 80%   (serializing + writing JSON)
+      canonicalizing: 80 → 95%  (building UI-canonical rows)
     """
     progress = _upload_progress.get(session_id)
     if progress is None:
-        return {"phase": "idle", "step": 0, "total": 0, "pct": 0}
+        return {"phase": "idle", "step": 0, "total": 0, "pct": 0, "phase_label": ""}
     step = progress.get("step", 0)
     total = progress.get("total", 0)
     phase = progress.get("phase", "parsing")
-    # Map phases to percentage ranges:
-    #   parsing: 0→80% (main work), persisting: 80→90%, canonicalizing: 90→98%
+
+    _PHASE_LABELS = {
+        "parsing": "Parsing positions…",
+        "persisting": "Saving data…",
+        "canonicalizing": "Building aggregates…",
+    }
+    phase_label = _PHASE_LABELS.get(phase, "Processing…")
+
     if phase == "parsing" and total > 0:
-        pct = round((step / total) * 80)
+        pct = 5 + round((step / total) * 65)       # 5 → 70
+    elif phase == "persisting" and total > 0:
+        pct = 70 + round((step / total) * 10)       # 70 → 80
     elif phase == "persisting":
-        pct = 85
+        pct = 75
+    elif phase == "canonicalizing" and total > 0:
+        pct = 80 + round((step / total) * 15)       # 80 → 95
     elif phase == "canonicalizing":
-        pct = 95
+        pct = 88
     else:
-        pct = 0
-    return {"phase": phase, "step": step, "total": total, "pct": pct}
+        pct = 5
+
+    return {"phase": phase, "step": step, "total": total, "pct": pct, "phase_label": phase_label}
+
+
+@app.get("/api/sessions/{session_id}/calc-progress")
+def get_calc_progress(session_id: str):
+    """
+    Poll calculation progress during EVE/NII computation.
+    Returns completed/total future count mapped to percentage.
+    """
+    progress = _calc_progress.get(session_id)
+    if progress is None:
+        return {"phase": "idle", "completed": 0, "total": 0, "pct": 0, "phase_label": ""}
+
+    phase = progress.get("phase", "preparing")
+    completed = progress.get("completed", 0)
+    total = progress.get("total", 1)
+    current_task = progress.get("current_task", "")
+
+    if phase == "preparing":
+        pct = 3
+    elif total > 0:
+        pct = 5 + round((completed / total) * 90)   # 5 → 95
+    else:
+        pct = 5
+
+    return {
+        "phase": phase,
+        "completed": completed,
+        "total": total,
+        "pct": min(pct, 95),
+        "phase_label": current_task,
+    }
 
 
 @app.post("/api/sessions/{session_id}/calculate", response_model=CalculationResultsResponse)
@@ -2172,6 +2304,12 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
 
     _assert_session_exists(session_id)
 
+    # ── Progress tracking ──────────────────────────────────────────────────────
+    _calc_progress[session_id] = {
+        "completed": 0, "total": 0,
+        "phase": "preparing", "current_task": "Loading positions…",
+    }
+
     # ── 1. Determine analysis date ────────────────────────────────────────────
     if req.analysis_date:
         try:
@@ -2184,6 +2322,7 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
     risk_free_index = req.risk_free_index or req.discount_curve_id
 
     # ── 2. Load motor positions ───────────────────────────────────────────────
+    _calc_progress[session_id]["current_task"] = "Loading positions…"
     motor_df = _reconstruct_motor_dataframe(session_id)
 
     # ── 3. Build base ForwardCurveSet ─────────────────────────────────────────
@@ -2206,6 +2345,7 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
         )
 
     # ── 4. Build regulatory scenario curve sets ───────────────────────────────
+    _calc_progress[session_id]["current_task"] = "Building scenario curves…"
     try:
         scenario_curve_sets = build_regulatory_curve_sets(
             base_set=base_curve_set,
@@ -2240,65 +2380,106 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
 
     import almready.workers as _workers
 
-    _eve_tag: dict = {}   # future → scenario_name | None  (None = base)
-    _nii_tag: dict = {}
+    # Unified workers: each scenario builds cashflows ONCE, derives both EVE+NII.
+    # 7 workers instead of 14 (base + 6 stressed).
+    from almready.config.nii_config import NII_HORIZON_MONTHS
 
-    # EVE base + stressed scenarios
-    _eve_tag[_executor.submit(
-        _workers.eve_base,
+    _unified_tag: dict = {}  # future → scenario_name | None (None = base)
+
+    _unified_tag[_executor.submit(
+        _workers.eve_nii_unified,
         motor_df, base_curve_set, base_curve_set,
-        req.discount_curve_id, "exact",
+        req.discount_curve_id, effective_margin_set,
+        risk_free_index, True, NII_HORIZON_MONTHS,
     )] = None
     for sc_name, sc_set in scenario_curve_sets.items():
-        _eve_tag[_executor.submit(
-            _workers.eve_base,
+        _unified_tag[_executor.submit(
+            _workers.eve_nii_unified,
             motor_df, sc_set, sc_set,
-            req.discount_curve_id, "exact",
+            req.discount_curve_id, effective_margin_set,
+            risk_free_index, True, NII_HORIZON_MONTHS,
         )] = sc_name
 
-    # NII base + stressed scenarios
-    _nii_tag[_executor.submit(
-        _workers.nii_base,
-        motor_df, base_curve_set, effective_margin_set,
-        risk_free_index, True, 12, "reprice_on_reset",
-    )] = None
-    for sc_name, sc_set in scenario_curve_sets.items():
-        _nii_tag[_executor.submit(
-            _workers.nii_base,
-            motor_df, sc_set, effective_margin_set,
-            risk_free_index, True, 12, "reprice_on_reset",
-        )] = sc_name
+    # Collect results from unified workers.
+    total_tasks = len(_unified_tag)
+    _calc_progress[session_id].update({
+        "phase": "computing", "completed": 0, "total": total_tasks,
+        "current_task": "Starting scenarios…",
+    })
 
-    # Collect results — attempt every future, accumulate all errors before raising.
     base_eve: float = 0.0
     scenario_eve: dict[str, float] = {}
     base_nii: float = 0.0
     scenario_nii: dict[str, float] = {}
     errors: list[str] = []
+    completed_count = 0
 
-    for fut in as_completed(_eve_tag):
-        sc = _eve_tag[fut]
-        label = sc if sc is not None else "base"
-        try:
-            v: float = fut.result()
-            if sc is None:
-                base_eve = v
-            else:
-                scenario_eve[sc] = v
-        except Exception as exc:
-            errors.append(f"EVE[{label}]: {type(exc).__name__}: {exc}")
+    # Accumulate chart data inline from each scenario's unified result.
+    _chart_eve_buckets: list[dict] = []
+    _chart_nii_monthly: list[dict] = []
 
-    for fut in as_completed(_nii_tag):
-        sc = _nii_tag[fut]
+    for fut in as_completed(_unified_tag):
+        sc = _unified_tag[fut]
         label = sc if sc is not None else "base"
+        completed_count += 1
+
+        if session_id in _calc_progress:
+            _calc_progress[session_id].update({
+                "completed": completed_count,
+                "current_task": f"EVE+NII: {label}",
+            })
+
         try:
-            v = fut.result()
+            result: dict = fut.result()
+            eve_val = float(result["eve_scalar"])
+            nii_val = float(result["nii_scalar"])
             if sc is None:
-                base_nii = v
+                base_eve = eve_val
+                base_nii = nii_val
             else:
-                scenario_nii[sc] = v
+                scenario_eve[sc] = eve_val
+                scenario_nii[sc] = nii_val
+
+            # Pivot EVE bucket breakdown: per-side_group → per-bucket chart rows
+            eve_bucket_list = result.get("eve_buckets")
+            if eve_bucket_list:
+                by_bucket: dict[str, dict] = {}
+                for b in eve_bucket_list:
+                    bname = b["bucket_name"]
+                    if bname not in by_bucket:
+                        by_bucket[bname] = {
+                            "scenario": label,
+                            "bucket_name": bname,
+                            "bucket_start_years": b["bucket_start_years"],
+                            "bucket_end_years": b["bucket_end_years"],
+                            "asset_pv": 0.0, "liability_pv": 0.0, "net_pv": 0.0,
+                        }
+                    sg = b["side_group"]
+                    if sg == "asset":
+                        by_bucket[bname]["asset_pv"] = float(b["pv_total"])
+                    elif sg == "liability":
+                        by_bucket[bname]["liability_pv"] = float(b["pv_total"])
+                    elif sg == "net":
+                        by_bucket[bname]["net_pv"] = float(b["pv_total"])
+                _chart_eve_buckets.extend(by_bucket.values())
+
+            # Label NII monthly rows with scenario
+            nii_monthly_list = result.get("nii_monthly")
+            if nii_monthly_list:
+                for m in nii_monthly_list:
+                    _chart_nii_monthly.append({
+                        "scenario": label,
+                        "month_index": m["month_index"],
+                        "month_label": m["month_label"],
+                        "interest_income": m["interest_income"],
+                        "interest_expense": m["interest_expense"],
+                        "net_nii": m["net_nii"],
+                    })
+
         except Exception as exc:
-            errors.append(f"NII[{label}]: {type(exc).__name__}: {exc}")
+            errors.append(f"EVE+NII[{label}]: {type(exc).__name__}: {exc}")
+
+    _calc_progress.pop(session_id, None)
 
     if errors:
         raise HTTPException(
@@ -2309,9 +2490,6 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
     # ── 7. Map to frontend CalculationResults contract ────────────────────────
 
     scenario_items: list[ScenarioResultItem] = []
-    worst_eve = base_eve
-    worst_delta_eve = 0.0
-    worst_scenario_name = "base"
 
     for scenario_name in req.scenarios:
         sc_eve = scenario_eve.get(scenario_name, base_eve)
@@ -2328,11 +2506,17 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
             delta_nii=delta_nii,
         ))
 
-        # Worst case = scenario with lowest EVE (most negative delta)
-        if sc_eve < worst_eve:
-            worst_eve = sc_eve
-            worst_delta_eve = delta_eve
-            worst_scenario_name = scenario_name
+    # Worst case = scenario with lowest EVE delta (EBA GL/2022/14 Art. 4.1.2:
+    # always identify worst among prescribed scenarios, even if all deltas > 0)
+    if scenario_items:
+        worst_item = min(scenario_items, key=lambda s: s.delta_eve)
+        worst_eve = worst_item.eve
+        worst_delta_eve = worst_item.delta_eve
+        worst_scenario_name = worst_item.scenario_name
+    else:
+        worst_eve = base_eve
+        worst_delta_eve = 0.0
+        worst_scenario_name = "base"
 
     calculated_at = datetime.now(timezone.utc).isoformat()
 
@@ -2345,6 +2529,18 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
         worst_case_scenario=worst_scenario_name,
         scenario_results=scenario_items,
         calculated_at=calculated_at,
+    )
+
+    # Save chart data inline (EVE buckets + NII monthly available from unified workers).
+    # allow_nan=False ensures we catch any stray NaN values (they would crash here
+    # rather than producing invalid JSON that silently fails downstream).
+    _chart_data_path(session_id).write_text(
+        json.dumps({
+            "session_id": session_id,
+            "eve_buckets": _chart_eve_buckets,
+            "nii_monthly": _chart_nii_monthly,
+        }, indent=2, allow_nan=False),
+        encoding="utf-8",
     )
 
     # Persist for retrieval on page refresh
@@ -2361,6 +2557,7 @@ def calculate_eve_nii(session_id: str, req: CalculateRequest) -> CalculationResu
         "currency": req.currency,
         "risk_free_index": risk_free_index,
         "worst_case_scenario": worst_scenario_name,
+        "nii_horizon_months": NII_HORIZON_MONTHS,
     }
     _calc_params_path(session_id).write_text(
         json.dumps(calc_params, indent=2),
@@ -2571,9 +2768,11 @@ def calculate_whatif(session_id: str, req: WhatIfCalculateRequest) -> WhatIfResu
     4. Runs EVE/NII on add positions (positive delta) and remove positions (negative delta).
     5. Returns 4 impact numbers: base_eve_delta, worst_eve_delta, base_nii_delta, worst_nii_delta.
     """
-    from almready.services.eve import run_eve_scenarios
-    from almready.services.nii import run_nii_12m_scenarios
     from almready.services.regulatory_curves import build_regulatory_curve_sets
+    from almready.services.eve import build_eve_cashflows
+    from almready.services.eve_analytics import compute_eve_full
+    from almready.services.nii import compute_nii_from_cashflows, compute_nii_margin_set
+    from almready.config.nii_config import NII_HORIZON_MONTHS
 
     _assert_session_exists(session_id)
 
@@ -2645,80 +2844,154 @@ def calculate_whatif(session_id: str, req: WhatIfCalculateRequest) -> WhatIfResu
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Error building scenario curves: {exc}")
 
-    # ── 5. Run EVE/NII on delta positions ──────────────────────────────────
-    add_base_eve = 0.0
-    add_worst_eve = 0.0
-    add_base_nii = 0.0
-    add_worst_nii = 0.0
+    # ── 5+6. Unified EVE+NII deltas on delta positions only ─────────────────
+    #   Builds cashflows ONCE per (delta_df, scenario), derives both EVE buckets
+    #   and NII monthly from the same cashflows. Halves the cashflow builds.
 
-    if has_adds:
-        try:
-            eve_add = run_eve_scenarios(
-                positions=add_df,
-                base_discount_curve_set=base_curve_set,
-                scenario_discount_curve_sets=scenario_curve_sets,
-                base_projection_curve_set=base_curve_set,
-                scenario_projection_curve_sets=scenario_curve_sets,
-                discount_index=discount_curve_id,
-                method="exact",
-            )
-            add_base_eve = eve_add.base_eve
-            add_worst_eve = eve_add.scenario_eve.get(worst_scenario, eve_add.base_eve)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"What-If EVE error (adds): {exc}")
+    def _unified_whatif_map(df: pd.DataFrame):
+        """Build unified EVE+NII data for all scenarios on a delta DataFrame.
+
+        Returns:
+            eve_data: {(scenario, bucket_name): {asset, liab}}
+            eve_meta: {bucket_name: start_years}
+            nii_data: {(scenario, month_idx): {income, expense, label}}
+        """
+        eve_data: dict[tuple[str, str], dict[str, float]] = {}
+        eve_meta: dict[str, float] = {}
+        nii_data: dict[tuple[str, int], dict[str, float]] = {}
+        if df.empty:
+            return eve_data, eve_meta, nii_data
 
         try:
-            nii_add = run_nii_12m_scenarios(
-                positions=add_df,
-                base_curve_set=base_curve_set,
-                scenario_curve_sets=scenario_curve_sets,
+            margin_set = compute_nii_margin_set(
+                df,
+                curve_set=base_curve_set,
                 risk_free_index=risk_free_index,
-                balance_constant=True,
+                as_of=base_curve_set.analysis_date,
             )
-            add_base_nii = nii_add.base_nii_12m
-            add_worst_nii = nii_add.scenario_nii_12m.get(worst_scenario, nii_add.base_nii_12m)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"What-If NII error (adds): {exc}")
+            raise HTTPException(status_code=500, detail=f"What-If margin calibration error: {exc}")
 
-    remove_base_eve = 0.0
-    remove_worst_eve = 0.0
-    remove_base_nii = 0.0
-    remove_worst_nii = 0.0
+        scenario_items: list[tuple[str, Any, Any]] = [
+            ("base", base_curve_set, base_curve_set),
+        ]
+        for sc_name, sc_set in scenario_curve_sets.items():
+            scenario_items.append((sc_name, sc_set, sc_set))
 
-    if has_removes:
-        try:
-            eve_rem = run_eve_scenarios(
-                positions=remove_df,
-                base_discount_curve_set=base_curve_set,
-                scenario_discount_curve_sets=scenario_curve_sets,
-                base_projection_curve_set=base_curve_set,
-                scenario_projection_curve_sets=scenario_curve_sets,
-                discount_index=discount_curve_id,
-                method="exact",
-            )
-            remove_base_eve = eve_rem.base_eve
-            remove_worst_eve = eve_rem.scenario_eve.get(worst_scenario, eve_rem.base_eve)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"What-If EVE error (removes): {exc}")
+        for sc_label, disc_set, proj_set in scenario_items:
+            try:
+                # Build cashflows ONCE per scenario
+                cashflows = build_eve_cashflows(
+                    df,
+                    analysis_date=disc_set.analysis_date,
+                    projection_curve_set=proj_set,
+                )
 
-        try:
-            nii_rem = run_nii_12m_scenarios(
-                positions=remove_df,
-                base_curve_set=base_curve_set,
-                scenario_curve_sets=scenario_curve_sets,
-                risk_free_index=risk_free_index,
-                balance_constant=True,
-            )
-            remove_base_nii = nii_rem.base_nii_12m
-            remove_worst_nii = nii_rem.scenario_nii_12m.get(worst_scenario, nii_rem.base_nii_12m)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"What-If NII error (removes): {exc}")
+                # EVE buckets from these cashflows
+                _, eve_buckets = compute_eve_full(
+                    cashflows,
+                    discount_curve_set=disc_set,
+                    discount_index=discount_curve_id,
+                    include_buckets=True,
+                )
+                if eve_buckets:
+                    for b in eve_buckets:
+                        bname = b["bucket_name"]
+                        sg = b["side_group"]
+                        if sg in ("asset", "liability"):
+                            key = (sc_label, bname)
+                            if key not in eve_data:
+                                eve_data[key] = {"asset": 0.0, "liab": 0.0}
+                            if sg == "asset":
+                                eve_data[key]["asset"] = float(b["pv_total"])
+                            else:
+                                eve_data[key]["liab"] = float(b["pv_total"])
+                            if bname not in eve_meta:
+                                eve_meta[bname] = float(b["bucket_start_years"])
 
-    # ── 6. Compute deltas: adds contribute positively, removes negatively ──
-    base_eve_delta = add_base_eve - remove_base_eve
-    worst_eve_delta = add_worst_eve - remove_worst_eve
-    base_nii_delta = add_base_nii - remove_base_nii
-    worst_nii_delta = add_worst_nii - remove_worst_nii
+                # NII from same cashflows
+                nii_result = compute_nii_from_cashflows(
+                    cashflows, df, proj_set,
+                    analysis_date=disc_set.analysis_date,
+                    horizon_months=NII_HORIZON_MONTHS,
+                    balance_constant=True,
+                    margin_set=margin_set,
+                    risk_free_index=risk_free_index,
+                )
+                for m in nii_result.monthly_breakdown:
+                    mi = m["month_index"]
+                    nii_data[(sc_label, mi)] = {
+                        "income": m["interest_income"],
+                        "expense": m["interest_expense"],
+                        "label": m["month_label"],
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"What-If unified [{sc_label}] error: {exc}",
+                )
+
+        return eve_data, eve_meta, nii_data
+
+    add_eve, add_meta, add_nii = _unified_whatif_map(add_df) if has_adds else ({}, {}, {})
+    rem_eve, rem_meta, rem_nii = _unified_whatif_map(remove_df) if has_removes else ({}, {}, {})
+
+    # ── EVE: Build per-bucket delta list ──────────────────────────────────
+    bucket_meta = {**rem_meta, **add_meta}
+    all_sb_keys = set(add_eve) | set(rem_eve)
+    eve_bucket_deltas: list[WhatIfBucketDelta] = []
+
+    for sc, bname in sorted(all_sb_keys, key=lambda x: (x[0], bucket_meta.get(x[1], 0.0))):
+        add_vals = add_eve.get((sc, bname), {"asset": 0.0, "liab": 0.0})
+        rem_vals = rem_eve.get((sc, bname), {"asset": 0.0, "liab": 0.0})
+        eve_bucket_deltas.append(WhatIfBucketDelta(
+            scenario=sc,
+            bucket_name=bname,
+            bucket_start_years=bucket_meta.get(bname, 0.0),
+            asset_pv_delta=add_vals["asset"] - rem_vals["asset"],
+            liability_pv_delta=add_vals["liab"] - rem_vals["liab"],
+        ))
+
+    # Derive aggregate EVE deltas by summing bucket PVs per scenario
+    eve_by_scenario: dict[str, float] = {}
+    for d in eve_bucket_deltas:
+        eve_by_scenario[d.scenario] = (
+            eve_by_scenario.get(d.scenario, 0.0) + d.asset_pv_delta + d.liability_pv_delta
+        )
+
+    base_eve_delta = eve_by_scenario.pop("base", 0.0)
+    scenario_eve_deltas = eve_by_scenario
+    worst_eve_delta = scenario_eve_deltas.get(worst_scenario, base_eve_delta)
+
+    # ── NII: Build per-month delta list ───────────────────────────────────
+    all_sm_keys = set(add_nii) | set(rem_nii)
+    nii_month_deltas: list[WhatIfMonthDelta] = []
+
+    for sc, mi in sorted(all_sm_keys, key=lambda x: (x[0], x[1])):
+        add_vals = add_nii.get((sc, mi), {"income": 0.0, "expense": 0.0, "label": ""})
+        rem_vals = rem_nii.get((sc, mi), {"income": 0.0, "expense": 0.0, "label": ""})
+        label = add_vals.get("label") or rem_vals.get("label") or f"M{mi}"
+        nii_month_deltas.append(WhatIfMonthDelta(
+            scenario=sc,
+            month_index=mi,
+            month_label=str(label),
+            income_delta=add_vals["income"] - rem_vals["income"],
+            expense_delta=add_vals["expense"] - rem_vals["expense"],
+        ))
+
+    # Derive aggregate NII deltas by summing monthly income + expense per scenario
+    nii_by_scenario: dict[str, float] = {}
+    for d in nii_month_deltas:
+        nii_by_scenario[d.scenario] = (
+            nii_by_scenario.get(d.scenario, 0.0) + d.income_delta + d.expense_delta
+        )
+
+    base_nii_delta = nii_by_scenario.pop("base", 0.0)
+    scenario_nii_deltas = nii_by_scenario
+    worst_nii_delta = scenario_nii_deltas.get(worst_scenario, base_nii_delta)
 
     return WhatIfResultsResponse(
         session_id=session_id,
@@ -2726,8 +2999,57 @@ def calculate_whatif(session_id: str, req: WhatIfCalculateRequest) -> WhatIfResu
         worst_eve_delta=worst_eve_delta,
         base_nii_delta=base_nii_delta,
         worst_nii_delta=worst_nii_delta,
+        scenario_eve_deltas=scenario_eve_deltas,
+        scenario_nii_deltas=scenario_nii_deltas,
+        eve_bucket_deltas=eve_bucket_deltas,
+        nii_month_deltas=nii_month_deltas,
         calculated_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+class ChartBucketRow(BaseModel):
+    scenario: str
+    bucket_name: str
+    bucket_start_years: float
+    bucket_end_years: float | None
+    asset_pv: float
+    liability_pv: float
+    net_pv: float
+
+class ChartNiiMonthRow(BaseModel):
+    scenario: str
+    month_index: int
+    month_label: str
+    interest_income: float
+    interest_expense: float
+    net_nii: float
+
+class ChartDataResponse(BaseModel):
+    session_id: str
+    eve_buckets: list[ChartBucketRow]
+    nii_monthly: list[ChartNiiMonthRow]
+
+
+def _chart_data_path(session_id: str) -> Path:
+    return _session_dir(session_id) / "chart_data.json"
+
+
+@app.get("/api/sessions/{session_id}/results/chart-data", response_model=ChartDataResponse)
+def get_chart_data(session_id: str) -> ChartDataResponse:
+    """Return per-bucket EVE and per-month NII data for charting.
+
+    Pre-computed inline during /calculate and saved as chart_data.json.
+    No lazy re-computation — just serve the cached file.
+    """
+    _assert_session_exists(session_id)
+
+    cache_path = _chart_data_path(session_id)
+    if not cache_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No chart data available. Run /calculate first.",
+        )
+    return ChartDataResponse.model_validate_json(cache_path.read_text(encoding="utf-8"))
 
 
 @app.get("/api/sessions/{session_id}/balance/summary", response_model=BalanceUploadResponse)

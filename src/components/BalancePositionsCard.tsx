@@ -24,6 +24,8 @@ interface BalancePositionsCardProps {
   summaryTree?: BalanceSummaryTree | null;
   isUploading?: boolean;
   uploadProgress?: number;
+  uploadPhase?: string;
+  uploadEta?: string;
 }
 
 type WhatIfDelta = {
@@ -316,6 +318,8 @@ export function BalancePositionsCard({
   summaryTree,
   isUploading = false,
   uploadProgress = 0,
+  uploadPhase = '',
+  uploadEta = '',
 }: BalancePositionsCardProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -504,7 +508,10 @@ export function BalancePositionsCard({
                       {Math.round(uploadProgress)}%
                     </span>
                   </div>
-                  <p className="text-[9px] text-muted-foreground mt-1">Uploading balance...</p>
+                  <p className="text-[9px] text-muted-foreground mt-1">
+                    {uploadPhase || 'Processing…'}
+                    {uploadEta ? ` — ${uploadEta}` : ''}
+                  </p>
                 </div>
               )}
             </div> : <div className="flex flex-col flex-1 min-h-0">

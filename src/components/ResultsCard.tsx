@@ -27,8 +27,8 @@ import type { CalculationResults, Scenario } from '@/types/financial';
 import { EVEChart } from '@/components/results/EVEChart';
 import { NIIChart } from '@/components/results/NIIChart';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
-import { calculateWhatIf } from '@/lib/api';
-import type { WhatIfModificationRequest } from '@/lib/api';
+import { calculateWhatIf, getChartData } from '@/lib/api';
+import type { WhatIfModificationRequest, ChartBucketRow, ChartNiiMonthRow } from '@/lib/api';
 import {
   Popover,
   PopoverContent,
@@ -40,6 +40,8 @@ interface ResultsCardProps {
   results: CalculationResults | null;
   isCalculating: boolean;
   calcProgress?: number;
+  calcPhase?: string;
+  calcEta?: string;
   sessionId: string | null;
   scenarios?: Scenario[];
 }
@@ -47,6 +49,8 @@ export function ResultsCard({
   results,
   isCalculating,
   calcProgress = 0,
+  calcPhase = '',
+  calcEta = '',
   sessionId,
   scenarios = [],
 }: ResultsCardProps) {
@@ -55,6 +59,7 @@ export function ResultsCard({
   const {
     modifications,
     isApplied,
+    applyCounter,
     cet1Capital: contextCet1,
     analysisDate
   } = useWhatIf();
@@ -69,10 +74,54 @@ export function ResultsCard({
     worstEve: 0,
     baseNii: 0,
     worstNii: 0,
+    scenarioEveDeltas: {} as Record<string, number>,
+    scenarioNiiDeltas: {} as Record<string, number>,
+    eveBucketDeltas: undefined as import('@/lib/api').WhatIfBucketDelta[] | undefined,
+    niiMonthDeltas: undefined as import('@/lib/api').WhatIfMonthDelta[] | undefined,
   });
   const whatIfRequestIdRef = useRef(0);
   const [whatIfLoading, setWhatIfLoading] = useState(false);
   const [selectedScenario, setSelectedScenario] = useState('parallel-up');
+
+  // Refs to always read the latest values inside the What-If useEffect without
+  // adding them to its dependency array (which would re-trigger the call).
+  const modificationsRef = useRef(modifications);
+  modificationsRef.current = modifications;
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
+
+  // Chart data from backend (per-bucket EVE + per-month NII).
+  const [eveBuckets, setEveBuckets] = useState<ChartBucketRow[]>([]);
+  const [niiMonthly, setNiiMonthly] = useState<ChartNiiMonthRow[]>([]);
+  const [chartDataLoading, setChartDataLoading] = useState(false);
+
+  // Fetch chart data when calculation results are available.
+  useEffect(() => {
+    if (!results || !sessionId) {
+      setEveBuckets([]);
+      setNiiMonthly([]);
+      return;
+    }
+    let cancelled = false;
+    setChartDataLoading(true);
+    getChartData(sessionId)
+      .then((resp) => {
+        if (cancelled) return;
+        setEveBuckets(resp.eve_buckets);
+        setNiiMonthly(resp.nii_monthly);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch chart data:', err);
+        if (!cancelled) {
+          setEveBuckets([]);
+          setNiiMonthly([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChartDataLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [results, sessionId]);
 
   // Default to the worst scenario when calculation results arrive.
   useEffect(() => {
@@ -84,27 +133,31 @@ export function ResultsCard({
     }
   }, [results]);
 
-  // Trigger What-If calculation when modifications are applied and base results exist.
-  // Uses a minimum spinner display time (400ms) so the user always sees the loading
-  // state, even when the backend responds quickly.
+  // Trigger What-If calculation ONLY when the user explicitly clicks "Apply to
+  // Analysis" (applyCounter increments). We guard on isApplied so that clearing /
+  // removing modifications (which sets isApplied=false) resets the impact.
+  // We read modifications & results from refs to avoid re-triggering when those
+  // change (e.g. after a base recalculation or modification list edits).
   useEffect(() => {
-    if (!isApplied || modifications.length === 0 || !results || !sessionId) {
-      setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0 });
+    const currentMods = modificationsRef.current;
+    const currentResults = resultsRef.current;
+
+    if (!isApplied || currentMods.length === 0 || !currentResults || !sessionId) {
+      setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0, scenarioEveDeltas: {}, scenarioNiiDeltas: {}, eveBucketDeltas: undefined, niiMonthDeltas: undefined });
       setWhatIfLoading(false);
       return;
     }
 
     const requestId = ++whatIfRequestIdRef.current;
     setWhatIfLoading(true);
-    // Clear stale values immediately so the UI transitions to loading state
-    setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0 });
+    setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0, scenarioEveDeltas: {}, scenarioNiiDeltas: {}, eveBucketDeltas: undefined, niiMonthDeltas: undefined });
 
     const startTime = Date.now();
     const MIN_SPINNER_MS = 400;
     let cancelled = false;
     let tid: ReturnType<typeof setTimeout>;
 
-    const modsPayload: WhatIfModificationRequest[] = modifications.map((m) => ({
+    const modsPayload: WhatIfModificationRequest[] = currentMods.map((m) => ({
       id: m.id,
       type: m.type,
       label: m.label,
@@ -137,6 +190,10 @@ export function ResultsCard({
             worstEve: resp.worst_eve_delta,
             baseNii: resp.base_nii_delta,
             worstNii: resp.worst_nii_delta,
+            scenarioEveDeltas: resp.scenario_eve_deltas ?? {},
+            scenarioNiiDeltas: resp.scenario_nii_deltas ?? {},
+            eveBucketDeltas: resp.eve_bucket_deltas,
+            niiMonthDeltas: resp.nii_month_deltas,
           });
           setWhatIfLoading(false);
         }, delay);
@@ -144,7 +201,7 @@ export function ResultsCard({
       .catch((err) => {
         console.error("What-If calculation failed:", err);
         if (!cancelled && requestId === whatIfRequestIdRef.current) {
-          setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0 });
+          setWhatIfImpact({ baseEve: 0, worstEve: 0, baseNii: 0, worstNii: 0, scenarioEveDeltas: {}, scenarioNiiDeltas: {}, eveBucketDeltas: undefined, niiMonthDeltas: undefined });
           setWhatIfLoading(false);
         }
       });
@@ -153,7 +210,8 @@ export function ResultsCard({
       cancelled = true;
       clearTimeout(tid);
     };
-  }, [isApplied, modifications, results, sessionId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyCounter, isApplied, sessionId]);
   // Build a lookup from scenario id → display label matching the Curves & Scenarios card
   // format: "Parallel Up +200bp", "Short Down -250bp", etc.
   const scenarioDisplayMap = new Map<string, string>();
@@ -198,7 +256,9 @@ export function ResultsCard({
                 {Math.round(calcProgress)}%
               </span>
             </div>
-            <p className="text-[9px] text-muted-foreground mt-1">This typically takes 3–6 minutes — please wait</p>
+            <p className="text-[9px] text-muted-foreground mt-1">
+              {calcEta || 'Estimating…'}
+            </p>
           </div>
         </div>
       </div>;
@@ -221,7 +281,11 @@ export function ResultsCard({
 
   // Calculate worst case values – percentages expressed as delta / CET1 (IRRBB standard)
   const worstEvePercent = cet1Capital !== null ? results.worstCaseDeltaEve / cet1Capital * 100 : null;
-  const worstNiiResult = results.scenarioResults.find(s => s.scenarioName === results.worstCaseScenario);
+  // NII worst may differ from EVE worst – find the actual NII-worst scenario
+  const worstNiiResult = results.scenarioResults.reduce(
+    (worst, sr) => (sr.deltaNii < worst.deltaNii ? sr : worst),
+    results.scenarioResults[0]
+  );
   const worstNiiDelta = worstNiiResult?.deltaNii ?? 0;
   const worstNiiPercent = cet1Capital !== null ? worstNiiDelta / cet1Capital * 100 : null;
 
@@ -331,18 +395,23 @@ export function ResultsCard({
                       hasModifications={hasModifications}
                       isLoading={whatIfLoading}
                     />
-                    <ResultsSummaryRow
-                      label={`${scenarioDropdownLabel} EVE`}
-                      baselineValue={selectedResult?.eve ?? results.baseEve}
-                      baselineCet1Pct={cet1Capital !== null ? (selectedResult?.deltaEve ?? 0) / cet1Capital * 100 : null}
-                      impactValue={hasModifications && isWorstSelected ? whatIfImpact.worstEve : 0}
-                      impactCet1Pct={hasModifications && isWorstSelected && cet1Capital !== null ? whatIfImpact.worstEve / cet1Capital * 100 : null}
-                      postValue={(selectedResult?.eve ?? results.baseEve) + (hasModifications && isWorstSelected ? whatIfImpact.worstEve : 0)}
-                      postCet1Pct={cet1Capital !== null ? ((selectedResult?.deltaEve ?? 0) + (hasModifications && isWorstSelected ? whatIfImpact.worstEve : 0)) / cet1Capital * 100 : null}
-                      hasModifications={hasModifications && isWorstSelected}
-                      isLoading={whatIfLoading && isWorstSelected}
-                      isWorst={isWorstSelected}
-                    />
+                    {(() => {
+                      const scenarioEveDelta = hasModifications
+                        ? (whatIfImpact.scenarioEveDeltas[selectedScenario] ?? whatIfImpact.worstEve)
+                        : 0;
+                      return <ResultsSummaryRow
+                        label={`${scenarioDropdownLabel} EVE`}
+                        baselineValue={selectedResult?.eve ?? results.baseEve}
+                        baselineCet1Pct={cet1Capital !== null ? (selectedResult?.deltaEve ?? 0) / cet1Capital * 100 : null}
+                        impactValue={scenarioEveDelta}
+                        impactCet1Pct={hasModifications && cet1Capital !== null ? scenarioEveDelta / cet1Capital * 100 : null}
+                        postValue={(selectedResult?.eve ?? results.baseEve) + scenarioEveDelta}
+                        postCet1Pct={cet1Capital !== null ? ((selectedResult?.deltaEve ?? 0) + scenarioEveDelta) / cet1Capital * 100 : null}
+                        hasModifications={hasModifications}
+                        isLoading={whatIfLoading}
+                        isWorst={isWorstSelected}
+                      />;
+                    })()}
                     <ResultsSummaryRow
                       label="Base NII"
                       baselineValue={results.baseNii}
@@ -354,19 +423,24 @@ export function ResultsCard({
                       hasModifications={hasModifications}
                       isLoading={whatIfLoading}
                     />
-                    <ResultsSummaryRow
-                      label={`${scenarioDropdownLabel} NII`}
-                      baselineValue={results.baseNii + (selectedResult?.deltaNii ?? 0)}
-                      baselineCet1Pct={cet1Capital !== null ? (selectedResult?.deltaNii ?? 0) / cet1Capital * 100 : null}
-                      impactValue={hasModifications && isWorstSelected ? whatIfImpact.worstNii : 0}
-                      impactCet1Pct={hasModifications && isWorstSelected && cet1Capital !== null ? whatIfImpact.worstNii / cet1Capital * 100 : null}
-                      postValue={results.baseNii + (selectedResult?.deltaNii ?? 0) + (hasModifications && isWorstSelected ? whatIfImpact.worstNii : 0)}
-                      postCet1Pct={cet1Capital !== null ? ((selectedResult?.deltaNii ?? 0) + (hasModifications && isWorstSelected ? whatIfImpact.worstNii : 0)) / cet1Capital * 100 : null}
-                      hasModifications={hasModifications && isWorstSelected}
-                      isLoading={whatIfLoading && isWorstSelected}
-                      isWorst={isWorstSelected}
-                      isLast
-                    />
+                    {(() => {
+                      const scenarioNiiDelta = hasModifications
+                        ? (whatIfImpact.scenarioNiiDeltas[selectedScenario] ?? whatIfImpact.worstNii)
+                        : 0;
+                      return <ResultsSummaryRow
+                        label={`${scenarioDropdownLabel} NII`}
+                        baselineValue={results.baseNii + (selectedResult?.deltaNii ?? 0)}
+                        baselineCet1Pct={cet1Capital !== null ? (selectedResult?.deltaNii ?? 0) / cet1Capital * 100 : null}
+                        impactValue={scenarioNiiDelta}
+                        impactCet1Pct={hasModifications && cet1Capital !== null ? scenarioNiiDelta / cet1Capital * 100 : null}
+                        postValue={results.baseNii + (selectedResult?.deltaNii ?? 0) + scenarioNiiDelta}
+                        postCet1Pct={cet1Capital !== null ? ((selectedResult?.deltaNii ?? 0) + scenarioNiiDelta) / cet1Capital * 100 : null}
+                        hasModifications={hasModifications}
+                        isLoading={whatIfLoading}
+                        isWorst={isWorstSelected}
+                        isLast
+                      />;
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -376,8 +450,8 @@ export function ResultsCard({
             <div className="w-2/3 flex flex-col min-h-0">
               <div className="rounded-lg border border-border overflow-hidden flex-1 min-h-0">
                 {activeChart === 'eve'
-                  ? <EVEChart fullWidth analysisDate={analysisDate} selectedScenario={selectedScenario} scenarioLabel={scenarioDropdownLabel} />
-                  : <NIIChart fullWidth analysisDate={analysisDate} selectedScenario={selectedScenario} scenarioLabel={scenarioDropdownLabel} />}
+                  ? <EVEChart fullWidth analysisDate={analysisDate} selectedScenario={selectedScenario} scenarioLabel={scenarioDropdownLabel} eveBuckets={eveBuckets} chartDataLoading={chartDataLoading} whatIfBucketDeltas={whatIfImpact.eveBucketDeltas} />
+                  : <NIIChart fullWidth analysisDate={analysisDate} selectedScenario={selectedScenario} scenarioLabel={scenarioDropdownLabel} niiMonthly={niiMonthly} chartDataLoading={chartDataLoading} whatIfMonthDeltas={whatIfImpact.niiMonthDeltas} />}
               </div>
             </div>
           </div>

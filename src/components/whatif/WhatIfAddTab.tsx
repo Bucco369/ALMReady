@@ -77,7 +77,7 @@ export function WhatIfAddTab() {
     
     const notional = formValues.notional || '—';
     const currency = formValues.currency || 'EUR';
-    const rawRate = formValues.coupon || formValues.depositRate || formValues.fixedRate;
+    const rawRate = formValues.coupon || formValues.depositRate || formValues.fixedRate || formValues.wac;
     const parsedRate = rawRate !== undefined ? parseFloat(rawRate) : NaN;
     const rate = Number.isFinite(parsedRate) ? parsedRate / 100 : undefined;
     const maturity = computeResidualMaturityYears(formValues);

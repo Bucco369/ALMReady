@@ -21,6 +21,7 @@ import pandas as pd
 
 from almready.services.eve_pipeline import load_positions_and_scheduled_flows
 from almready.services.market import load_forward_curve_set
+from almready.config.nii_config import NII_HORIZON_MONTHS
 from almready.services.nii import (
     NIIMonthlyProfileResult,
     run_nii_12m_scenarios_with_monthly_profile,
@@ -136,7 +137,7 @@ def run_nii_from_specs(
         balance_constant=balance_constant,
         margin_lookback_months=margin_lookback_months,
         margin_start_date_col=margin_start_date_col,
-        months=12,
+        months=NII_HORIZON_MONTHS,
         variable_annuity_payment_mode=variable_annuity_payment_mode,
     )
 

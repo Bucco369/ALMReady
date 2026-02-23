@@ -356,35 +356,67 @@ export function BalanceDetailsModalRemove({
     return `${labelParts.join(' ')} (filtered)`;
   };
 
-  const handleRemoveFilteredAsSingleWhatIf = () => {
-    if (subcategoryLocked) return;
-    if (!detailsData) return;
+  const [filterRemoveLoading, setFilterRemoveLoading] = useState(false);
+
+  const handleRemoveFilteredAsSingleWhatIf = async () => {
+    if (subcategoryLocked || !detailsData || !sessionId) return;
     const totals = detailsData.totals;
     if ((totals.positions ?? 0) <= 0) return;
 
-    const filterSummary = buildFilterSummary();
-    const subcategoryLabel = detailsData.subcategoria_ui ?? selectedCategory;
-    const filteredLabel = buildFilteredLabel(subcategoryLabel);
-    const detailsParts = [
-      `${totals.positions} contract${totals.positions !== 1 ? 's' : ''}`,
-      formatAmount(totals.amount ?? 0),
-    ];
-    if (filterSummary) detailsParts.push(filterSummary);
+    // Fetch ALL contract IDs matching the active filters so the backend
+    // can actually identify which positions to remove.
+    setFilterRemoveLoading(true);
+    try {
+      const resp = await getBalanceContracts(sessionId, {
+        subcategory_id: selectedCategory,
+        currency: filters.currencies,
+        rate_type: filters.rateTypes,
+        counterparty: filters.counterparties,
+        maturity: filters.maturityBuckets,
+        page: 1,
+        page_size: 50_000,
+      });
 
-    addModification({
-      type: 'remove',
-      removeMode: 'contracts',
-      label: filteredLabel,
-      details: detailsParts.join(' • '),
-      notional: totals.amount ?? 0,
-      category: normalizeCategory(detailsData.categoria_ui ?? selectedCategory),
-      subcategory: selectedCategory,
-      rate: totals.avg_rate ?? undefined,
-      maturity: totals.avg_maturity ?? 0,
-      positionDelta: totals.positions,
-    });
+      const contractIds = resp.contracts.map((c) => c.contract_id);
+      if (contractIds.length === 0) return;
 
-    onOpenChange(false);
+      // Build per-contract maturity distribution for accurate chart allocation
+      const maturityProfile = resp.contracts.map((c) => ({
+        amount: c.amount ?? 0,
+        maturityYears: c.maturity_years ?? 0,
+        rate: c.rate ?? undefined,
+      }));
+
+      const filterSummary = buildFilterSummary();
+      const subcategoryLabel = detailsData.subcategoria_ui ?? selectedCategory;
+      const filteredLabel = buildFilteredLabel(subcategoryLabel);
+      const detailsParts = [
+        `${totals.positions} contract${totals.positions !== 1 ? 's' : ''}`,
+        formatAmount(totals.amount ?? 0),
+      ];
+      if (filterSummary) detailsParts.push(filterSummary);
+
+      addModification({
+        type: 'remove',
+        removeMode: 'contracts',
+        contractIds,
+        label: filteredLabel,
+        details: detailsParts.join(' • '),
+        notional: totals.amount ?? 0,
+        category: normalizeCategory(detailsData.categoria_ui ?? selectedCategory),
+        subcategory: selectedCategory,
+        rate: totals.avg_rate ?? undefined,
+        maturity: totals.avg_maturity ?? 0,
+        positionDelta: totals.positions,
+        maturityProfile,
+      });
+
+      onOpenChange(false);
+    } catch (err) {
+      console.error('Failed to fetch contract IDs for filtered removal:', err);
+    } finally {
+      setFilterRemoveLoading(false);
+    }
   };
 
   const handleDrillDown = (group: string) => {
@@ -422,10 +454,10 @@ export function BalanceDetailsModalRemove({
                   size="sm"
                   onClick={handleRemoveFilteredAsSingleWhatIf}
                   className="h-7 text-xs"
-                  disabled={subcategoryLocked}
+                  disabled={subcategoryLocked || filterRemoveLoading}
                 >
                   <Minus className="mr-1.5 h-3 w-3" />
-                  Add filtered to Pending Removals
+                  {filterRemoveLoading ? 'Loading contracts...' : 'Add filtered to Pending Removals'}
                 </Button>
               )}
               {selectedContracts.size > 0 && (

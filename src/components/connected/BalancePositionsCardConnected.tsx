@@ -8,7 +8,7 @@
  * 2. EXCEL UPLOAD: Intercepts file/drop events, uploads to backend, refreshes tree.
  * 3. SUMMARY → POSITIONS MAPPING: Converts BalanceSummaryResponse → Position[].
  *    This mapping is LOSSY (one Position per sheet, not per contract).
- * 4. PERSISTENCE MARKER: localStorage remembers uploads across page refreshes.
+ * 4. HYDRATION: Backend-provided hasBalance flag triggers auto-load on mount.
  *
  * === CURRENT LIMITATIONS ===
  * - LOSSY MAPPING: mapSummaryToPositions() creates one Position per sheet with
@@ -21,12 +21,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BalancePositionsCard } from "@/components/BalancePositionsCard";
 import {
+  deleteBalance,
   getBalanceSummary,
   getUploadProgress,
   uploadBalanceExcel,
   uploadBalanceZip,
   type BalanceSummaryResponse,
 } from "@/lib/api";
+import { useProgressETA } from "@/hooks/useProgressETA";
 import { inferCategoryFromSheetName } from "@/lib/balanceUi";
 import { generateSamplePositionsCSV, parsePositionsCSV } from "@/lib/csvParser";
 import type { Position } from "@/types/financial";
@@ -35,10 +37,11 @@ interface BalancePositionsCardConnectedProps {
   positions: Position[];
   onPositionsChange: (positions: Position[]) => void;
   sessionId: string | null;
+  hasBalance: boolean;
+  onDataReset?: () => void;
 }
 
 const DEFAULT_MATURITY_DATE = "2030-12-31";
-const BALANCE_UPLOADED_SESSION_KEY = "almready_balance_uploaded_session_id";
 
 function isExcelFile(file: File): boolean {
   const lower = file.name.toLowerCase();
@@ -56,23 +59,6 @@ function isBalanceFile(file: File): boolean {
 function isNoBalanceUploadedError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return message.includes("no balance uploaded");
-}
-
-function getUploadedSessionMarker(): string | null {
-  return localStorage.getItem(BALANCE_UPLOADED_SESSION_KEY);
-}
-
-function setUploadedSessionMarker(sessionId: string): void {
-  localStorage.setItem(BALANCE_UPLOADED_SESSION_KEY, sessionId);
-}
-
-function clearUploadedSessionMarker(): void {
-  localStorage.removeItem(BALANCE_UPLOADED_SESSION_KEY);
-}
-
-function isCurrentSessionKnownUploaded(sessionId: string | null): boolean {
-  if (!sessionId) return false;
-  return getUploadedSessionMarker() === sessionId;
 }
 
 function mapSummaryToPositions(summary: BalanceSummaryResponse): Position[] {
@@ -98,22 +84,25 @@ export function BalancePositionsCardConnected({
   positions,
   onPositionsChange,
   sessionId,
+  hasBalance,
+  onDataReset,
 }: BalancePositionsCardConnectedProps) {
   const [balanceSummary, setBalanceSummary] = useState<BalanceSummaryResponse | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadPhase, setUploadPhase] = useState("");
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const etaText = useProgressETA(uploadProgress, isUploading);
 
   const refreshSummary = useCallback(async () => {
     if (!sessionId) return;
     try {
       const summary = await getBalanceSummary(sessionId);
-      setUploadedSessionMarker(summary.session_id);
       setBalanceSummary(summary);
       onPositionsChange(mapSummaryToPositions(summary));
     } catch (error) {
       if (isNoBalanceUploadedError(error)) {
-        clearUploadedSessionMarker();
         setBalanceSummary(null);
         return;
       }
@@ -126,9 +115,9 @@ export function BalancePositionsCardConnected({
 
   useEffect(() => {
     if (positions.length > 0) return;
-    if (!isCurrentSessionKnownUploaded(sessionId)) return;
+    if (!hasBalance) return;
     void refreshSummary();
-  }, [sessionId, positions.length, refreshSummary]);
+  }, [sessionId, hasBalance, positions.length, refreshSummary]);
 
   const handleBalanceUpload = useCallback(
     async (file: File) => {
@@ -142,6 +131,7 @@ export function BalancePositionsCardConnected({
 
       setIsUploading(true);
       setUploadProgress(0);
+      setUploadPhase("Uploading file…");
 
       // Once bytes are sent, start polling the backend for real progress.
       const startPolling = () => {
@@ -150,16 +140,22 @@ export function BalancePositionsCardConnected({
           try {
             const p = await getUploadProgress(sessionId);
             if (p.phase !== "idle") {
-              setUploadProgress(p.pct);
+              // Monotonicity: never let progress decrease
+              setUploadProgress(prev => Math.max(prev, p.pct));
+              if (p.phase_label) setUploadPhase(p.phase_label);
             }
           } catch {
             // Ignore transient poll errors; upload XHR will report real failures.
           }
-        }, 500);
+        }, 400);
       };
 
       try {
-        const onProgress = (pct: number) => setUploadProgress(pct); // 0→80 (XHR bytes)
+        // XHR byte transfer maps to 0→5% (fast network transfer);
+        // monotonicity guard ensures we never regress when polling starts.
+        const onProgress = (pct: number) =>
+          setUploadProgress(prev => Math.max(prev, pct));
+
         if (isZipFile(file)) {
           await uploadBalanceZip(sessionId, file, onProgress, startPolling);
         } else {
@@ -172,7 +168,7 @@ export function BalancePositionsCardConnected({
           pollTimerRef.current = null;
         }
         setUploadProgress(100);
-        setUploadedSessionMarker(sessionId);
+        setUploadPhase("");
         await refreshSummary();
       } catch (error) {
         console.error(
@@ -186,6 +182,7 @@ export function BalancePositionsCardConnected({
         }
         setIsUploading(false);
         setUploadProgress(0);
+        setUploadPhase("");
       }
     },
     [refreshSummary, sessionId]
@@ -219,7 +216,6 @@ export function BalancePositionsCardConnected({
   );
 
   const loadSampleIntoBalance = useCallback(() => {
-    clearUploadedSessionMarker();
     setBalanceSummary(null);
     onPositionsChange(parsePositionsCSV(generateSamplePositionsCSV()));
   }, [onPositionsChange]);
@@ -242,9 +238,14 @@ export function BalancePositionsCardConnected({
     const resetButton = target.closest('button[title="Reset all"]');
     if (!resetButton) return;
 
-    clearUploadedSessionMarker();
     setBalanceSummary(null);
-  }, [loadSampleIntoBalance]);
+    onDataReset?.();
+    if (sessionId) {
+      deleteBalance(sessionId).catch((err) =>
+        console.error("[BalancePositionsCardConnected] deleteBalance failed", err)
+      );
+    }
+  }, [loadSampleIntoBalance, onDataReset, sessionId]);
 
   return (
     <div
@@ -260,6 +261,8 @@ export function BalancePositionsCardConnected({
         summaryTree={balanceSummary?.summary_tree ?? null}
         isUploading={isUploading}
         uploadProgress={uploadProgress}
+        uploadPhase={uploadPhase}
+        uploadEta={etaText}
       />
     </div>
   );

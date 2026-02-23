@@ -31,6 +31,8 @@ interface WhatIfContextType {
   clearModifications: () => void;
   isApplied: boolean;
   applyModifications: () => void;
+  /** Monotonic counter incremented only on explicit "Apply to Analysis" clicks. */
+  applyCounter: number;
   addCount: number;
   removeCount: number;
   // New: Analysis Date & CET1 Capital
@@ -47,7 +49,8 @@ const WhatIfContext = createContext<WhatIfContextType | null>(null);
 export function WhatIfProvider({ children }: { children: ReactNode }) {
   const [modifications, setModifications] = useState<WhatIfModification[]>([]);
   const [isApplied, setIsApplied] = useState(false);
-  const [analysisDate, setAnalysisDate] = useState<Date | null>(null);
+  const [applyCounter, setApplyCounter] = useState(0);
+  const [analysisDate, setAnalysisDate] = useState<Date | null>(new Date());
   const [cet1Capital, setCet1Capital] = useState<number | null>(null);
 
   const addModification = useCallback((mod: Omit<WhatIfModification, 'id'>) => {
@@ -68,12 +71,14 @@ export function WhatIfProvider({ children }: { children: ReactNode }) {
 
   const applyModifications = useCallback(() => {
     setIsApplied(true);
+    setApplyCounter(prev => prev + 1);
   }, []);
 
   const resetAll = useCallback(() => {
     setModifications([]);
     setIsApplied(false);
-    setAnalysisDate(null);
+    setApplyCounter(0);
+    setAnalysisDate(new Date());
     setCet1Capital(null);
   }, []);
 
@@ -88,6 +93,7 @@ export function WhatIfProvider({ children }: { children: ReactNode }) {
       clearModifications,
       isApplied,
       applyModifications,
+      applyCounter,
       addCount,
       removeCount,
       analysisDate,
