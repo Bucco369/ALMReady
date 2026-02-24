@@ -21,12 +21,12 @@ def _normalise_apply_to(
 
     selected = {str(ix).strip() for ix in apply_to if str(ix).strip() != ""}
     if not selected:
-        raise ValueError("apply_to se ha informado pero no contiene indices validos.")
+        raise ValueError("apply_to was specified but contains no valid indices.")
 
     unknown = sorted(selected - available_indexes)
     if unknown:
         available = sorted(available_indexes)
-        raise ValueError(f"Indices no encontrados en base_set: {unknown}. Disponibles: {available}")
+        raise ValueError(f"Indices not found in base_set: {unknown}. Available: {available}")
 
     return selected
 
@@ -37,10 +37,10 @@ def apply_parallel_shock(
     apply_to: Iterable[str] | None = None,
 ) -> ForwardCurveSet:
     """
-    Aplica un shift paralelo (en bps) sobre FwdRate y devuelve un nuevo ForwardCurveSet.
+    Apply a parallel shift (in bps) on FwdRate and return a new ForwardCurveSet.
 
-    - `apply_to=None`: aplica a todos los indices.
-    - `apply_to=[...]`: aplica solo al subset indicado.
+    - `apply_to=None`: apply to all indices.
+    - `apply_to=[...]`: apply only to the specified subset.
     """
 
     _validate_curve_points_columns(base_set.points)
@@ -68,13 +68,13 @@ def apply_parallel_shocks(
     apply_to: Iterable[str] | None = None,
 ) -> dict[str, ForwardCurveSet]:
     """
-    Ejecuta varios shocks paralelos y devuelve un diccionario escenario -> ForwardCurveSet.
+    Execute multiple parallel shocks and return a scenario -> ForwardCurveSet dictionary.
     """
 
     out: dict[str, ForwardCurveSet] = {}
     for shock in shocks:
         if shock.name in out:
-            raise ValueError(f"Nombre de escenario duplicado: {shock.name!r}")
+            raise ValueError(f"Duplicate scenario name: {shock.name!r}")
         out[shock.name] = apply_parallel_shock(base_set, shock=shock, apply_to=apply_to)
     return out
 

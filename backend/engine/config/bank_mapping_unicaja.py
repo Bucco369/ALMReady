@@ -1,7 +1,7 @@
 """
-Mapping Unicaja -> canonico ALMReady.
+Mapping Unicaja -> ALMReady canonical schema.
 
-Disenado para cargar automaticamente los CSV de:
+Designed to automatically load CSVs from:
   ../data/fixtures/positions/unicaja
 """
 
@@ -25,11 +25,11 @@ OPTIONAL_CANONICAL_COLUMNS = (
     "fixed_rate",
     "repricing_freq",
     "payment_freq",
-    # Solo para variable_annuity:
-    # - "reprice_on_reset" (default legacy)
+    # Only for variable_annuity:
+    # - "reprice_on_reset" (legacy default)
     # - "fixed_payment"
-    # Si no viene en fichero, puede definirse en DEFAULT_CANONICAL_VALUES
-    # o via parametro global `variable_annuity_payment_mode` del pipeline.
+    # If not in the file, can be defined in DEFAULT_CANONICAL_VALUES
+    # or via the global parameter `variable_annuity_payment_mode` of the pipeline.
     "annuity_payment_mode",
     "next_reprice_date",
     "floor_rate",
@@ -57,8 +57,8 @@ BANK_COLUMNS_MAP = {
     "Reset period": "repricing_freq",
     "Payment period": "payment_freq",
     "Interest payment period": "payment_freq",
-    # Si el banco aporta una columna de modo de cuota para variable_annuity,
-    # mapearla aqui a `annuity_payment_mode`.
+    # If the bank provides a payment mode column for variable_annuity,
+    # map it here to `annuity_payment_mode`.
     "Annuity Payment Mode": "annuity_payment_mode",
     "Reset anchor date": "next_reprice_date",
     "Interest rate floor": "floor_rate",
@@ -99,7 +99,7 @@ NUMERIC_SCALE_MAP = {
 
 
 DEFAULT_CANONICAL_VALUES = {
-    # Ejemplo de activacion global por banco:
+    # Example of global activation per bank:
     # "annuity_payment_mode": "fixed_payment",
 }
 

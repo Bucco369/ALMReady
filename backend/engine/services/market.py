@@ -8,17 +8,17 @@ import pandas as pd
 
 from engine.io.curves_forward_reader import load_forward_curves
 from engine.core.curves import ForwardCurve, curve_from_long_df
-from engine.core.daycount import normalizar_base_de_calculo, yearfrac
+from engine.core.daycount import normalize_daycount_base, yearfrac
 
 
 @dataclass
 class ForwardCurveSet:
     """
-    Set de curvas forward por IndexName, ya listo para consultar rates/DF.
+    Forward curve set by IndexName, ready to query rates/DF.
     """
     analysis_date: date
     base: str
-    points: pd.DataFrame               # tabla long canónica (debug/export)
+    points: pd.DataFrame               # canonical long table (debug/export)
     curves: Dict[str, ForwardCurve]    # index_name -> ForwardCurve
 
     @property
@@ -28,12 +28,12 @@ class ForwardCurveSet:
     def get(self, index_name: str) -> ForwardCurve:
         if index_name not in self.curves:
             available = self.available_indices
-            raise KeyError(f"Curva no encontrada: {index_name!r}. Disponibles: {available}")
+            raise KeyError(f"Curve not found: {index_name!r}. Available: {available}")
         return self.curves[index_name]
 
     def require_indices(self, required_indices: Iterable[str]) -> None:
         """
-        Falla si falta cualquier indice requerido en el set de curvas.
+        Fails if any required index is missing from the curve set.
         """
         required = sorted(
             {
@@ -45,8 +45,8 @@ class ForwardCurveSet:
         missing = [ix for ix in required if ix not in self.curves]
         if missing:
             raise KeyError(
-                f"Faltan curvas para indices requeridos: {missing}. "
-                f"Disponibles: {self.available_indices}"
+                f"Missing curves for required indices: {missing}. "
+                f"Available: {self.available_indices}"
             )
 
     def require_float_index_coverage(
@@ -58,11 +58,11 @@ class ForwardCurveSet:
         row_offset: int = 2,
     ) -> None:
         """
-        Garantiza cobertura de curvas para posiciones flotantes.
+        Ensures curve coverage for floating rate positions.
         """
         for col in (rate_type_col, index_col):
             if col not in positions.columns:
-                raise ValueError(f"positions no contiene columna requerida: {col!r}")
+                raise ValueError(f"positions does not contain required column: {col!r}")
 
         rate_tokens = (
             positions[rate_type_col]
@@ -84,7 +84,7 @@ class ForwardCurveSet:
         if missing_index_mask.any():
             rows = [int(i) + row_offset for i in positions.index[missing_index_mask][:10]]
             raise ValueError(
-                f"Posiciones float sin index_name en filas {rows}"
+                f"Float positions without index_name in rows {rows}"
             )
 
         required = (
@@ -98,14 +98,14 @@ class ForwardCurveSet:
 
     def _t(self, d: date) -> float:
         """
-        Convierte una fecha calendario a year-fraction desde analysis_date usando self.base.
+        Converts a calendar date to year-fraction from analysis_date using self.base.
         """
-        b = normalizar_base_de_calculo(self.base)
+        b = normalize_daycount_base(self.base)
         return yearfrac(self.analysis_date, d, b)
 
     def rate_on_date(self, index_name: str, d: date) -> float:
         """
-        Tipo equivalente (comp. continua, vía DF log-lineal) en una fecha d.
+        Equivalent rate (continuous comp., via log-linear DF) on a date d.
         """
         curve = self.get(index_name)
         t = self._t(d)
@@ -113,7 +113,7 @@ class ForwardCurveSet:
 
     def df_on_date(self, index_name: str, d: date) -> float:
         """
-        Discount Factor en una fecha d (útil para EVE).
+        Discount Factor on a date d (useful for EVE).
         """
         curve = self.get(index_name)
         t = self._t(d)
@@ -128,7 +128,7 @@ def load_forward_curve_set(
 ) -> ForwardCurveSet:
     """
     Pipeline:
-      Excel curvas (wide) -> long canónico -> ForwardCurve por IndexName
+      Excel curves (wide) -> canonical long -> ForwardCurve by IndexName
     """
     df = load_forward_curves(
         path,

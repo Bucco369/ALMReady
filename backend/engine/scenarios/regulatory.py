@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import exp
 from typing import Mapping
 
-# Escenarios oficiales (Art. 1 y 2 del Reglamento Delegado (UE) 2024/856).
+# Official scenarios (Art. 1 and 2 of Delegated Regulation (EU) 2024/856).
 EVE_REGULATORY_SCENARIO_IDS: tuple[str, ...] = (
     "parallel-up",
     "parallel-down",
@@ -18,7 +18,7 @@ NII_REGULATORY_SCENARIO_IDS: tuple[str, ...] = (
     "parallel-down",
 )
 
-# Soporte interno opcional (no oficial SOT): long-up/down.
+# Optional internal support (non-official SOT): long-up/down.
 _EXTENDED_INTERNAL_SCENARIOS: tuple[str, ...] = (
     "long-up",
     "long-down",
@@ -51,7 +51,7 @@ class CurrencyShockBps:
     long: int
 
 
-# Annex Part A del Reglamento (UE) 2024/856 (valores en bps).
+# Annex Part A of Regulation (EU) 2024/856 (values in bps).
 ANNEX_PART_A_SHOCKS_BPS: dict[str, CurrencyShockBps] = {
     "ARS": CurrencyShockBps(parallel=400, short=500, long=300),
     "AUD": CurrencyShockBps(parallel=300, short=450, long=200),
@@ -90,7 +90,7 @@ def shock_parameters_for_currency(currency: str) -> RegulatoryShockParameters:
     if code not in ANNEX_PART_A_SHOCKS_BPS:
         available = sorted(ANNEX_PART_A_SHOCKS_BPS.keys())
         raise KeyError(
-            f"Divisa sin parametros en Annex Part A: {code!r}. Disponibles: {available}"
+            f"Currency without parameters in Annex Part A: {code!r}. Available: {available}"
         )
 
     v = ANNEX_PART_A_SHOCKS_BPS[code]
@@ -141,7 +141,7 @@ def _scenario_delta(
         return (+0.8 * abs(delta_short)) - (0.6 * abs(delta_long))
 
     available = sorted(SUPPORTED_SCENARIO_IDS)
-    raise ValueError(f"Escenario no soportado: {scenario_id!r}. Disponibles: {available}")
+    raise ValueError(f"Unsupported scenario: {scenario_id!r}. Available: {available}")
 
 
 def apply_regulatory_shock_rate(
@@ -154,9 +154,9 @@ def apply_regulatory_shock_rate(
     floor_parameters: PostShockFloorParameters = DEFAULT_FLOOR_PARAMETERS,
 ) -> float:
     """
-    Aplica shock regulatorio sobre la risk-free:
-    - Formula de escenarios Art. 2.
-    - Floor post-shock de Art. 3(7), con regla de observed lower rate.
+    Apply regulatory shock on the risk-free rate:
+    - Scenario formula per Art. 2.
+    - Post-shock floor per Art. 3(7), with observed lower rate rule.
     """
     base_rate = float(base_rate)
     shocked = base_rate + _scenario_delta(
@@ -186,9 +186,9 @@ def build_scenario_set(
     include_internal_extended: bool = False,
 ) -> tuple[str, ...]:
     """
-    Devuelve escenarios por proposito:
-    - purpose="eve": 6 oficiales
-    - purpose="nii": 2 oficiales
+    Return scenarios by purpose:
+    - purpose="eve": 6 official
+    - purpose="nii": 2 official
     """
     p = str(purpose).strip().lower()
     if p == "eve":
@@ -196,7 +196,7 @@ def build_scenario_set(
     elif p == "nii":
         base_set = NII_REGULATORY_SCENARIO_IDS
     else:
-        raise ValueError("purpose debe ser 'eve' o 'nii'")
+        raise ValueError("purpose must be 'eve' or 'nii'")
 
     if include_internal_extended:
         return (*base_set, *_EXTENDED_INTERNAL_SCENARIOS)
@@ -211,7 +211,7 @@ def override_shock_parameters(
     long: float | None = None,
 ) -> RegulatoryShockParameters:
     """
-    Utilidad para cambios regulatorios futuros sin romper API.
+    Utility for future regulatory changes without breaking the API.
     """
     return RegulatoryShockParameters(
         parallel=base_parameters.parallel if parallel is None else float(parallel),
@@ -226,7 +226,7 @@ def shock_parameters_from_mapping(
     required = {"parallel", "short", "long"}
     missing = sorted(required - set(mapping.keys()))
     if missing:
-        raise ValueError(f"Faltan claves en mapping de shocks: {missing}")
+        raise ValueError(f"Missing keys in shocks mapping: {missing}")
     return RegulatoryShockParameters(
         parallel=float(mapping["parallel"]),
         short=float(mapping["short"]),

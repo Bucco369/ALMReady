@@ -32,7 +32,7 @@ def _summary_path(session_id: str) -> Path:
 
 
 def _motor_positions_path(session_id: str) -> Path:
-    return _session_dir(session_id) / "motor_positions.json"
+    return _session_dir(session_id) / "motor_positions.parquet"
 
 
 def _curves_summary_path(session_id: str) -> Path:

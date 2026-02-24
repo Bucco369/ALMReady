@@ -39,7 +39,7 @@ def load_positions_from_specs(
 
     base_path = Path(root_path)
     if not base_path.exists():
-        raise FileNotFoundError(f"No existe root_path para posiciones: {base_path}")
+        raise FileNotFoundError(f"root_path for positions does not exist: {base_path}")
 
     specs = (
         list(source_specs)
@@ -47,18 +47,18 @@ def load_positions_from_specs(
         else list(_mapping_attr(mapping_module, "SOURCE_SPECS"))
     )
     if not specs:
-        raise ValueError("SOURCE_SPECS vacio: define al menos una fuente.")
+        raise ValueError("SOURCE_SPECS is empty: define at least one source.")
 
     frames: list[pd.DataFrame] = []
     total_specs = len(specs)
 
     for idx, raw_spec in enumerate(specs, start=1):
         if not isinstance(raw_spec, Mapping):
-            raise ValueError(f"SOURCE_SPECS[{idx}] debe ser Mapping, recibido: {type(raw_spec)}")
+            raise ValueError(f"SOURCE_SPECS[{idx}] must be Mapping, received: {type(raw_spec)}")
 
         pattern = raw_spec.get("pattern")
         if not pattern:
-            raise ValueError(f"SOURCE_SPECS[{idx}] sin 'pattern'.")
+            raise ValueError(f"SOURCE_SPECS[{idx}] missing 'pattern'.")
 
         spec_name = str(raw_spec.get("name", pattern))
         file_type = str(raw_spec.get("file_type", raw_spec.get("kind", "auto")))
@@ -70,7 +70,7 @@ def load_positions_from_specs(
         if not matches:
             if required:
                 raise FileNotFoundError(
-                    f"No se encontro ningun fichero para pattern='{pattern}' en {base_path}"
+                    f"No file found for pattern='{pattern}' in {base_path}"
                 )
             continue
 
@@ -116,6 +116,6 @@ def load_positions_from_specs(
             on_progress(idx, total_specs)
 
     if not frames:
-        raise ValueError("No se cargaron posiciones con SOURCE_SPECS.")
+        raise ValueError("No positions loaded from SOURCE_SPECS.")
 
     return pd.concat(frames, ignore_index=True)

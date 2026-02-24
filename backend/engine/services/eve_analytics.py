@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 """
-Analytics de EVE para reporting y visualizacion.
+EVE analytics for reporting and visualization.
 
-Este modulo no sustituye el calculo EVE oficial:
-- El PV sigue calculandose flujo a flujo (exacto).
-- El bucketing se aplica solo para agrupar resultados en tablas/graficos.
+This module does not replace the official EVE calculation:
+- PV is still computed flow by flow (exact).
+- Bucketing is applied only for grouping results in tables/charts.
 """
 
 from collections.abc import Mapping, Sequence
@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 
 from engine.config.eve_buckets import EVE_VIS_BUCKETS_OPTIMAL
-from engine.core.daycount import normalizar_base_de_calculo, yearfrac
+from engine.core.daycount import normalize_daycount_base, yearfrac
 from engine.services._eve_utils import normalise_buckets as _normalise_buckets_shared
 from engine.services.eve import EVEBucket, build_eve_cashflows
 from engine.services.market import ForwardCurveSet
@@ -24,7 +24,7 @@ from engine.services.market import ForwardCurveSet
 
 @dataclass(frozen=True)
 class EVEScenarioPoint:
-    """Punto de resumen de un escenario EVE respecto al base."""
+    """Summary point of an EVE scenario vs base."""
 
     scenario: str
     eve_value: float
@@ -44,7 +44,7 @@ def build_eve_scenario_summary(
     scenario_eve: Mapping[str, float],
 ) -> pd.DataFrame:
     """
-    Construye tabla de resumen por escenario con delta vs base y flag worst.
+    Build summary table by scenario with delta vs base and worst flag.
     """
     rows: list[dict[str, Any]] = [
         {
@@ -73,13 +73,13 @@ def build_eve_scenario_summary(
 
 
 def worst_scenario_from_summary(summary: pd.DataFrame) -> str | None:
-    """Devuelve el nombre del escenario marcado como worst en summary."""
+    """Returns the name of the scenario marked as worst in summary."""
     if summary.empty:
         return None
     required = {"scenario", "is_worst"}
     missing = sorted(required - set(summary.columns))
     if missing:
-        raise ValueError(f"summary sin columnas requeridas: {missing}")
+        raise ValueError(f"summary missing required columns: {missing}")
     worst = summary.loc[summary["is_worst"].astype(bool)]
     if worst.empty:
         return None
@@ -169,7 +169,7 @@ def compute_eve_full(
     # Bucket breakdown
     norm_buckets = _normalise_buckets(buckets)
     bucket_meta = _bucket_meta_table(norm_buckets)
-    dc_base = normalizar_base_de_calculo(discount_curve_set.base)
+    dc_base = normalize_daycount_base(discount_curve_set.base)
 
     # OPT-3: Cache yearfrac by unique date
     tyears_cache = {d: max(0.0, float(yearfrac(discount_curve_set.analysis_date, d, dc_base))) for d in unique_dates}
@@ -273,13 +273,13 @@ def build_eve_bucket_breakdown_exact(
     buckets: Sequence[EVEBucket | Mapping[str, Any]] | None = None,
 ) -> pd.DataFrame:
     """
-    Descomposicion exacta por bucket temporal y por lado (asset/liability/net).
+    Exact decomposition by time bucket and side (asset/liability/net).
 
-    Importante:
-    - El PV se calcula flujo a flujo con DF exacto.
-    - El bucket solo se usa para agrupar resultados visuales/reporting.
+    Important:
+    - PV is calculated flow by flow with exact DF.
+    - Bucket is only used for grouping visual/reporting results.
 
-    Output principal:
+    Main output:
     - scenario, bucket_order, bucket_name, side_group
     - pv_interest, pv_principal, pv_total
     - cashflow_total, flow_count
@@ -299,7 +299,7 @@ def build_eve_bucket_breakdown_exact(
     ]
     for scenario_name, discount_set in scenario_discount_curve_sets.items():
         if scenario_name not in scenario_projection:
-            raise KeyError(f"Falta projection curve set para escenario {scenario_name!r}.")
+            raise KeyError(f"Missing projection curve set for scenario {scenario_name!r}.")
         scenario_items.append((str(scenario_name), discount_set, scenario_projection[scenario_name]))
 
     all_rows: list[pd.DataFrame] = []
@@ -337,9 +337,9 @@ def build_eve_bucket_breakdown_exact(
         work["flow_date"] = pd.to_datetime(work["flow_date"], errors="coerce").dt.date
         if work["flow_date"].isna().any():
             rows = [int(i) + 2 for i in work.index[work["flow_date"].isna()][:10].tolist()]
-            raise ValueError(f"Cashflows con flow_date invalida en filas {rows}")
+            raise ValueError(f"Cashflows with invalid flow_date in rows {rows}")
 
-        dc_base = normalizar_base_de_calculo(discount_set.base)
+        dc_base = normalize_daycount_base(discount_set.base)
         work["t_years"] = work["flow_date"].apply(
             lambda d: max(0.0, float(yearfrac(discount_set.analysis_date, d, dc_base)))
         )
@@ -371,7 +371,7 @@ def build_eve_bucket_breakdown_exact(
         grouped = grouped.merge(bucket_meta, on="bucket_name", how="left")
         grouped["scenario"] = str(scenario_name)
 
-        # Completar buckets x lado para consistencia de graficos.
+        # Fill all bucket x side combinations for chart consistency.
         full_rows: list[dict[str, Any]] = []
         grouped_idx = grouped.set_index(["bucket_name", "side_group"])
         for _, b in bucket_meta.iterrows():

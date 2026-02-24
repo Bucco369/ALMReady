@@ -42,7 +42,7 @@ def _add_frequency(d: date, frequency: tuple[int, str] | None) -> date:
 
 def _weighted_average(values: pd.Series, weights: pd.Series) -> float:
     if values.empty:
-        raise ValueError("No hay valores para calcular promedio ponderado.")
+        raise ValueError("No values to calculate weighted average.")
     w = weights.fillna(0.0).astype(float)
     v = values.astype(float)
     total_w = float(w.sum())
@@ -63,7 +63,7 @@ def _filter_recent_positions(
 
     months = int(lookback_months)
     if months <= 0:
-        raise ValueError("lookback_months debe ser > 0 o None.")
+        raise ValueError("lookback_months must be > 0 or None.")
 
     if start_date_col not in positions.columns:
         return positions.copy()
@@ -77,7 +77,7 @@ def _filter_recent_positions(
 @dataclass
 class CalibratedMarginSet:
     """
-    Tabla agregada de margenes para renovaciones de balance constante.
+    Aggregated margin table for constant balance renewals.
     """
 
     table: pd.DataFrame
@@ -92,7 +92,7 @@ class CalibratedMarginSet:
         required = {"rate_type", "margin_rate"}
         missing = sorted(required - set(self.table.columns))
         if missing:
-            raise ValueError(f"CalibratedMarginSet.table sin columnas requeridas: {missing}")
+            raise ValueError(f"CalibratedMarginSet.table missing required columns: {missing}")
 
         df = self.table.copy()
         for c in ("rate_type", *_DIMENSIONS):
@@ -123,7 +123,7 @@ class CalibratedMarginSet:
     ) -> float:
         if self.table.empty:
             if default is None:
-                raise KeyError("CalibratedMarginSet vacio y sin default para lookup.")
+                raise KeyError("CalibratedMarginSet is empty and has no default for lookup.")
             return float(default)
 
         req = {
@@ -135,13 +135,13 @@ class CalibratedMarginSet:
         rt = str(rate_type).strip().lower()
         if rt not in {"fixed", "float"}:
             if default is None:
-                raise KeyError(f"rate_type invalido en lookup_margin: {rate_type!r}")
+                raise KeyError(f"Invalid rate_type in lookup_margin: {rate_type!r}")
             return float(default)
 
         df = self.table[self.table["rate_type"] == rt].copy()
         if df.empty:
             if default is None:
-                raise KeyError(f"Sin margenes para rate_type={rt!r}")
+                raise KeyError(f"No margins for rate_type={rt!r}")
             return float(default)
 
         profiles: list[tuple[str, ...]] = [
@@ -173,7 +173,7 @@ class CalibratedMarginSet:
         if default is not None:
             return float(default)
         raise KeyError(
-            "No se encontro margen para lookup con request="
+            "No margin found for lookup with request="
             f"(rate_type={rt!r}, source_contract_type={req['source_contract_type']!r}, "
             f"side={req['side']!r}, repricing_freq={req['repricing_freq']!r}, "
             f"index_name={req['index_name']!r})"
@@ -190,12 +190,12 @@ def calibrate_margin_set(
     start_date_col: str = "start_date",
 ) -> CalibratedMarginSet:
     """
-    Calibra margenes para renovacion usando datos recientes comparables.
+    Calibrate margins for renewal using comparable recent data.
 
     - fixed: margin = fixed_rate - rf(benchmark_date)
-        * con repricing_freq: benchmark_date = as_of + repricing_freq
-        * sin repricing_freq: benchmark_date = as_of + plazo original (maturity - start)
-        * fallback si faltan fechas: benchmark_date = as_of + 1Y
+        * with repricing_freq: benchmark_date = as_of + repricing_freq
+        * without repricing_freq: benchmark_date = as_of + original term (maturity - start)
+        * fallback if dates are missing: benchmark_date = as_of + 1Y
     - float: margin = spread
     """
     if recent_positions.empty:
@@ -235,14 +235,14 @@ def calibrate_margin_set(
             fixed_rate = float(_fixed_rate_raw)
             freq = _parse_frequency_token(repricing_freq)
             if freq is not None:
-                # Tipo fijo con repricing: benchmark al tenor del repricing.
+                # Fixed rate with repricing: benchmark at the repricing tenor.
                 bench_date = _add_frequency(as_of_date, freq)
             else:
-                # Tipo fijo sin repricing (caso habitual): el benchmark se
-                # toma al plazo original del contrato (maturity - start) para
-                # reflejar el punto de la curva al que se origino la posicion.
-                # Ejemplo: prestamo fijo a 20 anos -> rf(20Y), no rf(1Y).
-                # Fallback a 1Y solo si faltan fechas.
+                # Fixed rate without repricing (common case): the benchmark is
+                # taken at the original term of the contract (maturity - start) to
+                # reflect the curve point at which the position was originated.
+                # Example: 20-year fixed loan -> rf(20Y), not rf(1Y).
+                # Fallback to 1Y only if dates are missing.
                 sd = pd.to_datetime(getattr(row, "start_date", None), errors="coerce")
                 md = pd.to_datetime(getattr(row, "maturity_date", None), errors="coerce")
                 if pd.notna(sd) and pd.notna(md) and md > sd:
@@ -284,7 +284,7 @@ def calibrate_margin_set(
 def load_margin_set_csv(path: str | Path) -> CalibratedMarginSet:
     p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f"No existe fichero de margenes: {p}")
+        raise FileNotFoundError(f"Margin file does not exist: {p}")
     df = pd.read_csv(p)
     return CalibratedMarginSet(df)
 

@@ -49,7 +49,7 @@ def parse_frequency_token(
     if not m:
         if strict:
             raise ValueError(
-                f"Frecuencia invalida en {field_name!r} para contract_id={row_id!r}: {value!r}"
+                f"Invalid frequency in {field_name!r} for contract_id={row_id!r}: {value!r}"
             )
         return None
 

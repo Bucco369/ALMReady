@@ -23,10 +23,10 @@ from engine.io.positions_reader import read_positions_dataframe, read_tabular_ra
 def _resolve_column_name(df: pd.DataFrame, col: str | int, *, field_name: str) -> str:
     if isinstance(col, int):
         if col < 0 or col >= len(df.columns):
-            raise ValueError(f"{field_name} index fuera de rango: {col}")
+            raise ValueError(f"{field_name} index out of range: {col}")
         return str(df.columns[col])
     if col not in df.columns:
-        raise ValueError(f"{field_name} no existe en datos: {col!r}")
+        raise ValueError(f"{field_name} does not exist in data: {col!r}")
     return str(col)
 
 
@@ -49,7 +49,7 @@ def _normalise_upper_token_set(values: Iterable[str]) -> set[str]:
 def _resolve_contract_id_source_column(raw_df: pd.DataFrame, mapping_module: Any) -> str:
     bank_columns_map = _mapping_attr(mapping_module, "BANK_COLUMNS_MAP")
     if not isinstance(bank_columns_map, Mapping):
-        raise ValueError("BANK_COLUMNS_MAP debe ser Mapping.")
+        raise ValueError("BANK_COLUMNS_MAP must be a Mapping.")
 
     norm_to_source: dict[str, str] = {}
     for col in raw_df.columns:
@@ -63,8 +63,8 @@ def _resolve_contract_id_source_column(raw_df: pd.DataFrame, mapping_module: Any
             return norm_to_source[key]
 
     raise ValueError(
-        "No se pudo resolver la columna origen de contract_id para scheduled. "
-        "Revisa BANK_COLUMNS_MAP."
+        "Could not resolve the contract_id source column for scheduled. "
+        "Check BANK_COLUMNS_MAP."
     )
 
 
@@ -97,10 +97,10 @@ def read_scheduled_tabular(
     reset_index: bool = True,
 ) -> ScheduledLoadResult:
     """
-    Lector jerarquico para productos scheduled (filas contract + payment).
+    Hierarchical reader for scheduled products (contract + payment rows).
 
-    - Devuelve contratos canonizados y flujos de principal enlazados por contract_id.
-    - Mantiene trazabilidad por fila original via source_row.
+    - Returns canonized contracts and principal flows linked by contract_id.
+    - Maintains traceability by original row via source_row.
     """
 
     raw_df, resolved_header_row = read_tabular_raw(
@@ -131,20 +131,20 @@ def read_scheduled_tabular(
     contract_kinds = _normalise_token_set(contract_row_kinds)
     payment_kinds = _normalise_token_set(payment_row_kinds)
     if not contract_kinds:
-        raise ValueError("contract_row_kinds vacio para scheduled.")
+        raise ValueError("contract_row_kinds is empty for scheduled.")
     if not payment_kinds:
-        raise ValueError("payment_row_kinds vacio para scheduled.")
+        raise ValueError("payment_row_kinds is empty for scheduled.")
 
     include_payment_types_norm = None
     if include_payment_types is not None:
         include_payment_types_norm = _normalise_upper_token_set(include_payment_types)
         if not include_payment_types_norm:
-            raise ValueError("include_payment_types informado pero vacio.")
+            raise ValueError("include_payment_types specified but empty.")
 
     kinds = raw_df[row_kind_col].astype("string").fillna("").str.strip().str.lower()
     contract_rows = raw_df.loc[kinds.isin(contract_kinds)].copy()
     if contract_rows.empty:
-        raise ValueError("No se encontraron filas contract en scheduled.")
+        raise ValueError("No contract rows found in scheduled.")
 
     contracts = read_positions_dataframe(
         contract_rows,
@@ -173,7 +173,7 @@ def read_scheduled_tabular(
         if active_contract_id is None:
             if strict_payment_contract_link:
                 raise ValueError(
-                    f"Fila payment sin contrato previo (source_row={source_row}) en scheduled."
+                    f"Payment row without previous contract (source_row={source_row}) in scheduled."
                 )
             continue
 
@@ -185,13 +185,13 @@ def read_scheduled_tabular(
         flow_date = _parse_date(row.get(payment_date_col), dayfirst=dayfirst)
         if flow_date is None:
             raise ValueError(
-                f"Fecha de flujo invalida en source_row={source_row}: {row.get(payment_date_col)!r}"
+                f"Invalid flow date in source_row={source_row}: {row.get(payment_date_col)!r}"
             )
 
         principal_amount = _parse_number(row.get(payment_amount_col))
         if principal_amount is None:
             raise ValueError(
-                f"Importe de flujo invalido en source_row={source_row}: {row.get(payment_amount_col)!r}"
+                f"Invalid flow amount in source_row={source_row}: {row.get(payment_amount_col)!r}"
             )
 
         flow_records.append(
@@ -223,12 +223,12 @@ def load_scheduled_from_specs(
     source_specs: Sequence[Mapping[str, Any]] | None = None,
 ) -> ScheduledLoadResult:
     """
-    Carga scheduled desde SOURCE_SPECS con formato jerarquico contract/payment.
+    Load scheduled from SOURCE_SPECS with hierarchical contract/payment format.
     """
 
     base_path = Path(root_path)
     if not base_path.exists():
-        raise FileNotFoundError(f"No existe root_path para scheduled: {base_path}")
+        raise FileNotFoundError(f"root_path does not exist for scheduled: {base_path}")
 
     specs = (
         list(source_specs)
@@ -236,18 +236,18 @@ def load_scheduled_from_specs(
         else list(_mapping_attr(mapping_module, "SOURCE_SPECS"))
     )
     if not specs:
-        raise ValueError("SOURCE_SPECS vacio: define al menos una fuente scheduled.")
+        raise ValueError("SOURCE_SPECS is empty: define at least one scheduled source.")
 
     contract_frames: list[pd.DataFrame] = []
     flow_frames: list[pd.DataFrame] = []
 
     for idx, raw_spec in enumerate(specs, start=1):
         if not isinstance(raw_spec, Mapping):
-            raise ValueError(f"SOURCE_SPECS[{idx}] debe ser Mapping, recibido: {type(raw_spec)}")
+            raise ValueError(f"SOURCE_SPECS[{idx}] must be a Mapping, received: {type(raw_spec)}")
 
         pattern = raw_spec.get("pattern")
         if not pattern:
-            raise ValueError(f"SOURCE_SPECS[{idx}] sin 'pattern'.")
+            raise ValueError(f"SOURCE_SPECS[{idx}] without 'pattern'.")
 
         spec_name = str(raw_spec.get("name", pattern))
         file_type = str(raw_spec.get("file_type", raw_spec.get("kind", "auto")))
@@ -259,7 +259,7 @@ def load_scheduled_from_specs(
         if not matches:
             if required:
                 raise FileNotFoundError(
-                    f"No se encontro ningun fichero para pattern='{pattern}' en {base_path}"
+                    f"No file found for pattern='{pattern}' in {base_path}"
                 )
             continue
 
@@ -318,7 +318,7 @@ def load_scheduled_from_specs(
                 flow_frames.append(principal_flows)
 
     if not contract_frames:
-        raise ValueError("No se cargaron contratos scheduled con SOURCE_SPECS.")
+        raise ValueError("No scheduled contracts were loaded with SOURCE_SPECS.")
 
     contracts_out = pd.concat(contract_frames, ignore_index=True)
     if flow_frames:

@@ -6,9 +6,9 @@ from dateutil.relativedelta import relativedelta
 
 def add_tenor(d: date, tenor: str) -> date:
     """
-    Suma un tenor tipo 'ON', '1W', '3M', '5Y' a una fecha d.
+    Add a tenor like 'ON', '1W', '3M', '5Y' to a date d.
 
-    Nota: NO aplica ajuste de calendario hábil (business day adjustment).
+    Note: does NOT apply business day adjustment.
     """
     t = str(tenor).strip().upper()
 
@@ -27,4 +27,4 @@ def add_tenor(d: date, tenor: str) -> date:
         n = int(t[:-1])
         return d + relativedelta(years=n)
 
-    raise ValueError(f"Tenor no soportado: {tenor!r}")
+    raise ValueError(f"Unsupported tenor: {tenor!r}")

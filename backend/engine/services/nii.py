@@ -8,7 +8,7 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 
 from engine.config import NII_HORIZON_MONTHS
-from engine.core.daycount import normalizar_base_de_calculo, yearfrac
+from engine.core.daycount import normalize_daycount_base, yearfrac
 from engine.services.margin_engine import CalibratedMarginSet, calibrate_margin_set
 from engine.services.market import ForwardCurveSet
 from engine.services.nii_projectors import (
@@ -59,11 +59,11 @@ def _normalise_source_contract_type(series: pd.Series) -> pd.Series:
 
 def _split_implemented_positions(positions: pd.DataFrame) -> pd.DataFrame:
     """
-    En esta fase soportamos fixed_annuity, fixed_bullet, fixed_linear,
-    fixed_scheduled, variable_annuity, variable_bullet, variable_linear
-    y variable_scheduled.
-    Si viene source_contract_type, se valida explicitamente que no haya
-    tipos no implementados (excepto static_position, que se excluye).
+    At this stage we support fixed_annuity, fixed_bullet, fixed_linear,
+    fixed_scheduled, variable_annuity, variable_bullet, variable_linear,
+    and variable_scheduled.
+    If source_contract_type is present, explicitly validate that there are no
+    unimplemented types (except static_position, which is excluded).
     """
     if positions.empty:
         return positions.copy()
@@ -78,10 +78,10 @@ def _split_implemented_positions(positions: pd.DataFrame) -> pd.DataFrame:
         )
         if unknown:
             raise NotImplementedError(
-                "NII MVP solo implementa source_contract_type en "
+                "NII MVP only implements source_contract_type in "
                 "['fixed_annuity', 'fixed_bullet', 'fixed_linear', 'fixed_scheduled', "
                 "'variable_annuity', 'variable_bullet', 'variable_linear', 'variable_scheduled']. "
-                f"Tipos presentes no implementados: {unknown}"
+                f"Unimplemented types found: {unknown}"
             )
 
         mask = sct.isin(_IMPLEMENTED_SOURCE_CONTRACT_TYPES)
@@ -89,12 +89,12 @@ def _split_implemented_positions(positions: pd.DataFrame) -> pd.DataFrame:
 
     if "rate_type" not in positions.columns:
         raise ValueError(
-            "positions no contiene 'source_contract_type' ni 'rate_type'; "
-            "no se pueden identificar tipos NII implementados."
+            "positions does not contain 'source_contract_type' or 'rate_type'; "
+            "cannot identify implemented NII types."
         )
 
-    # Fallback cuando no hay source_contract_type:
-    # asumimos:
+    # Fallback when source_contract_type is absent:
+    # we assume:
     # - fixed + maturity_date -> fixed_bullet
     # - float + maturity_date -> variable_bullet
     mask = (
@@ -151,9 +151,9 @@ def run_nii_12m_base(
     variable_annuity_payment_mode: str = "reprice_on_reset",
 ) -> float:
     """
-    MVP actual: NII 12m para fixed_annuity, fixed_bullet, fixed_linear,
+    Current MVP: 12-month NII for fixed_annuity, fixed_bullet, fixed_linear,
     fixed_scheduled, variable_annuity, variable_bullet, variable_linear
-    y variable_scheduled.
+    and variable_scheduled.
     """
     nii_positions = _split_implemented_positions(positions)
     if nii_positions.empty:
@@ -194,8 +194,8 @@ def run_nii_12m_base(
     has_scheduled = (not fixed_scheduled_positions.empty) or (not variable_scheduled_positions.empty)
     if has_scheduled and scheduled_principal_flows is None:
         raise ValueError(
-            "Se han recibido posiciones scheduled pero falta scheduled_principal_flows. "
-            "Carga contract+payment con io.scheduled_reader.load_scheduled_from_specs."
+            "Scheduled positions received but scheduled_principal_flows is missing. "
+            "Load contract+payment using io.scheduled_reader.load_scheduled_from_specs."
         )
 
     out = 0.0
@@ -296,10 +296,10 @@ def run_nii_12m_scenarios(
     variable_annuity_payment_mode: str = "reprice_on_reset",
 ) -> NIIRunResult:
     """
-    Orquestacion base + escenarios para NII 12m.
-    En esta fase soporta fixed_annuity, fixed_bullet, fixed_linear,
+    Orchestration base + scenarios for 12-month NII.
+    At this stage supports fixed_annuity, fixed_bullet, fixed_linear,
     fixed_scheduled, variable_annuity, variable_bullet, variable_linear
-    y variable_scheduled.
+    and variable_scheduled.
     """
     nii_positions = _split_implemented_positions(positions)
 
@@ -364,19 +364,19 @@ def build_nii_monthly_profile(
     variable_annuity_payment_mode: str = "reprice_on_reset",
 ) -> pd.DataFrame:
     """
-    Perfil mensual de NII por escenario.
+    Monthly NII profile by scenario.
 
-    Columnas:
+    Columns:
     - scenario
     - month_index (1..months)
     - month_label (1M..12M)
-    - interest_income (activo, esperado positivo)
-    - interest_expense (pasivo, esperado negativo)
+    - interest_income (asset, expected positive)
+    - interest_expense (liability, expected negative)
     - net_nii
     """
     m = int(months)
     if m <= 0:
-        raise ValueError("months debe ser > 0")
+        raise ValueError("months must be > 0")
 
     nii_positions = _split_implemented_positions(positions)
     if nii_positions.empty:
@@ -1139,7 +1139,7 @@ def compute_nii_from_cashflows(
                     getattr(pos, "notional"),
                     field_name="notional", row_id=cid,
                 ))
-                base = normalizar_base_de_calculo(str(getattr(pos, "daycount_base")))
+                base = normalize_daycount_base(str(getattr(pos, "daycount_base")))
                 sign = side_sign(getattr(pos, "side"), row_id=cid)
 
                 accrual_start = accrual_start_map.get(
@@ -1252,7 +1252,7 @@ def compute_nii_from_cashflows(
                 notional = abs(coerce_float(
                     getattr(pos, "notional"), field_name="notional", row_id=cid,
                 ))
-                base = normalizar_base_de_calculo(str(getattr(pos, "daycount_base")))
+                base = normalize_daycount_base(str(getattr(pos, "daycount_base")))
                 sign = side_sign(getattr(pos, "side"), row_id=cid)
                 side = str(getattr(pos, "side", "A")).strip().upper()
                 is_asset = side == "A"

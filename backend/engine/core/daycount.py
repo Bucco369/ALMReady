@@ -3,15 +3,15 @@ from __future__ import annotations
 from datetime import date
 
 
-# --- Bases canónicas del motor ---
+# --- Canonical daycount bases ---
 BASE_ACT_360 = "ACT/360"
 BASE_ACT_365 = "ACT/365"
 BASE_ACT_ACT = "ACT/ACT"
 BASE_30_360  = "30/360"
 
 
-# --- Mapeo de entradas típicas a bases canónicas ---
-BASE_DE_CALCULO_MAP = {
+# --- Map typical input variants to canonical bases ---
+DAYCOUNT_BASE_MAP = {
     # ACT/360
     "ACT/360": BASE_ACT_360,
     "ACT360": BASE_ACT_360,
@@ -19,7 +19,7 @@ BASE_DE_CALCULO_MAP = {
     "ACTUAL/360": BASE_ACT_360,
     "ACTUAL/360.0": BASE_ACT_360,
 
-    # ACT/365 (y variantes típicas)
+    # ACT/365 (and typical variants)
     "ACT/365": BASE_ACT_365,
     "ACT365": BASE_ACT_365,
     "A/365": BASE_ACT_365,
@@ -46,58 +46,58 @@ BASE_DE_CALCULO_MAP = {
 }
 
 
-def normalizar_base_de_calculo(valor: str) -> str:
+def normalize_daycount_base(value: str) -> str:
     """
-    Normaliza variantes a una base canónica del motor:
+    Normalize input variants to a canonical daycount base:
     ACT/360, ACT/365, ACT/ACT, 30/360
     """
-    if valor is None:
-        raise ValueError("Base de calculo vacía.")
+    if value is None:
+        raise ValueError("Daycount base is empty.")
 
-    v = str(valor).strip().upper()
+    v = str(value).strip().upper()
 
-    # normalización básica
+    # basic normalization
     v = v.replace(" ", "").replace("-", "/")
 
-    # quita paréntesis típicos: 30/360(US) o 30/360(USNASD)
+    # strip typical parentheses: 30/360(US) or 30/360(USNASD)
     for ch in ("(", ")", "[", "]"):
         v = v.replace(ch, "")
 
-    # normaliza variantes comunes de notación 30E.
+    # normalize common 30E notation variants
     v = v.replace("30/360E", "30E/360")
 
-    # variantes frecuentes con sufijos
+    # common suffix variants
     v = v.replace("US", "")          # 30/360US
     v = v.replace("NASD", "")        # 30/360NASD
     v = v.replace("FIXED", "F")      # ACT/365FIXED -> ACT/365F
 
-    if v in BASE_DE_CALCULO_MAP:
-        return BASE_DE_CALCULO_MAP[v]
+    if v in DAYCOUNT_BASE_MAP:
+        return DAYCOUNT_BASE_MAP[v]
 
-    raise ValueError(f"Base de calculo no reconocida: {valor!r}")
+    raise ValueError(f"Unrecognized daycount base: {value!r}")
 
 
 # ============================================================
-# Helpers: bisiestos y fin de mes (para 30/360 US con febrero)
+# Helpers: leap years and end-of-month (for 30/360 US with February)
 # ============================================================
-def es_año_bisiesto(año: int) -> bool:
-    return (año % 4 == 0 and año % 100 != 0) or (año % 400 == 0)
+def is_leap_year(year: int) -> bool:
+    return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
 
 
-def _ultimo_dia_mes(año: int, mes: int) -> int:
-    if mes == 2:
-        return 29 if es_año_bisiesto(año) else 28
-    if mes in (1, 3, 5, 7, 8, 10, 12):
+def _last_day_of_month(year: int, month: int) -> int:
+    if month == 2:
+        return 29 if is_leap_year(year) else 28
+    if month in (1, 3, 5, 7, 8, 10, 12):
         return 31
     return 30
 
 
-def _es_ultimo_dia_mes(d: date) -> bool:
-    return d.day == _ultimo_dia_mes(d.year, d.month)
+def _is_last_day_of_month(d: date) -> bool:
+    return d.day == _last_day_of_month(d.year, d.month)
 
 
-def _es_ultimo_dia_febrero(d: date) -> bool:
-    return d.month == 2 and _es_ultimo_dia_mes(d)
+def _is_last_day_of_february(d: date) -> bool:
+    return d.month == 2 and _is_last_day_of_month(d)
 
 
 # ============================================================
@@ -105,11 +105,11 @@ def _es_ultimo_dia_febrero(d: date) -> bool:
 # ============================================================
 def yearfrac(d0: date, d1: date, base: str) -> float:
     """
-    Fracción de año entre d0 y d1 según base canónica:
+    Year fraction between d0 and d1 using a canonical daycount base:
       ACT/360, ACT/365, ACT/ACT (ISDA), 30/360 (US)
     """
     if d1 < d0:
-        raise ValueError("d1 debe ser >= d0")
+        raise ValueError("d1 must be >= d0")
 
     days = (d1 - d0).days
 
@@ -125,17 +125,17 @@ def yearfrac(d0: date, d1: date, base: str) -> float:
     if base == BASE_30_360:
         return yearfrac_30_360_us(d0, d1)
 
-    raise ValueError(f"Base no soportada: {base}")
+    raise ValueError(f"Unsupported daycount base: {base}")
 
 
 def yearfrac_act_act_isda(d0: date, d1: date) -> float:
     if d1 < d0:
-        raise ValueError("d1 debe ser >= d0")
+        raise ValueError("d1 must be >= d0")
     if d0 == d1:
         return 0.0
 
     def diy(y: int) -> int:
-        return 366 if es_año_bisiesto(y) else 365
+        return 366 if is_leap_year(y) else 365
 
     if d0.year == d1.year:
         return (d1 - d0).days / float(diy(d0.year))
@@ -153,22 +153,22 @@ def yearfrac_act_act_isda(d0: date, d1: date) -> float:
 
 def yearfrac_30_360_us(d0: date, d1: date) -> float:
     """
-    30/360 (US) con ajuste especial de febrero (NASD).
+    30/360 (US) with special February end-of-month adjustment (NASD).
     """
     if d1 < d0:
-        raise ValueError("d1 debe ser >= d0")
+        raise ValueError("d1 must be >= d0")
 
     d0_day, d1_day = d0.day, d1.day
     d0_month, d1_month = d0.month, d1.month
     d0_year, d1_year = d0.year, d1.year
 
-    # Ajuste especial: fin de febrero
-    if _es_ultimo_dia_febrero(d0):
+    # Special adjustment: end of February
+    if _is_last_day_of_february(d0):
         d0_day = 30
-    if _es_ultimo_dia_febrero(d1) and d0_day in (30, 31):
+    if _is_last_day_of_february(d1) and d0_day in (30, 31):
         d1_day = 30
 
-    # Ajustes por 31
+    # Adjustments for day 31
     if d0_day == 31:
         d0_day = 30
     if d1_day == 31 and d0_day in (30, 31):

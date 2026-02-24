@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from engine.core.daycount import normalizar_base_de_calculo
+from engine.core.daycount import DAYCOUNT_BASE_MAP, normalize_daycount_base
 from engine.io._utils import (
     mapping_attr as _mapping_attr,
     mapping_attr_optional as _mapping_attr_optional,
@@ -46,29 +46,19 @@ def _apply_text_aliases(
     exact = {str(k).strip(): str(v).strip() for k, v in aliases.items()}
     folded = {_norm_token(k): str(v).strip() for k, v in aliases.items()}
 
-    out: list[Any] = []
-    for value in series:
-        if pd.isna(value):
-            out.append(pd.NA)
-            continue
+    stripped = series.astype(str).str.strip()
+    blank_mask = series.isna() | stripped.eq("")
 
-        token = str(value).strip()
-        if token == "":
-            out.append(pd.NA)
-            continue
+    # Try exact match, then case-insensitive (folded) match
+    exact_mapped = stripped.map(exact)
+    folded_mapped = stripped.str.upper().map(folded)
 
-        if token in exact:
-            out.append(exact[token])
-            continue
+    # Priority: exact > folded > original
+    result = exact_mapped.where(exact_mapped.notna(), folded_mapped)
+    result = result.where(result.notna(), stripped)
+    result = result.where(~blank_mask, other=pd.NA)
 
-        folded_key = _norm_token(token)
-        if folded_key in folded:
-            out.append(folded[folded_key])
-            continue
-
-        out.append(token)
-
-    return pd.Series(out, index=series.index, dtype="object")
+    return pd.Series(result.values, index=series.index, dtype="object")
 
 
 
@@ -81,36 +71,24 @@ def _normalise_categorical_column(
 ) -> pd.Series:
     map_norm = {_norm_token(k): v for k, v in mapping.items()}
     canonical_norm = {_norm_token(v): v for v in map_norm.values()}
+    # Merged lookup: canonical takes precedence, then bank tokens
+    full_map = {**canonical_norm, **map_norm}
 
-    out: list[Any] = []
-    invalid_rows: list[int] = []
-    invalid_values: list[Any] = []
+    raw = df[column]
+    blank_mask = raw.isna() | raw.astype(str).str.strip().eq("")
+    normed = raw.astype(str).str.strip().str.upper()
+    result = normed.map(full_map)
+    result = result.where(~blank_mask, other=None)
 
-    for idx, value in df[column].items():
-        if pd.isna(value) or str(value).strip() == "":
-            out.append(None)
-            continue
-
-        token = _norm_token(value)
-        if token in map_norm:
-            out.append(map_norm[token])
-            continue
-        if token in canonical_norm:
-            out.append(canonical_norm[token])
-            continue
-
-        out.append(None)
-        invalid_rows.append(int(idx) + row_offset)
-        invalid_values.append(value)
-
-    if invalid_rows:
-        values = sorted({str(v) for v in invalid_values})
-        rows = invalid_rows[:10]
+    invalid = ~blank_mask & result.isna()
+    if invalid.any():
+        rows = [int(i) + row_offset for i in raw[invalid].index[:10].tolist()]
+        values = sorted({str(v) for v in raw[invalid].head(10).tolist()})
         raise ValueError(
-            f"Valores no reconocidos en '{column}' para filas {rows}: {values}"
+            f"Unrecognized values in '{column}' for rows {rows}: {values}"
         )
 
-    return pd.Series(out, index=df.index, dtype="object")
+    return result
 
 
 def _normalise_daycount_column(
@@ -119,29 +97,68 @@ def _normalise_daycount_column(
     *,
     row_offset: int,
 ) -> pd.Series:
-    out: list[Any] = []
-    invalid_rows: list[int] = []
-    invalid_values: list[Any] = []
+    raw = df[column]
+    blank_mask = raw.isna() | raw.astype(str).str.strip().eq("")
 
-    for idx, value in df[column].items():
-        if pd.isna(value) or str(value).strip() == "":
-            out.append(None)
-            continue
-        try:
-            out.append(normalizar_base_de_calculo(str(value)))
-        except Exception:
-            out.append(None)
-            invalid_rows.append(int(idx) + row_offset)
-            invalid_values.append(value)
+    # Replicate the normalize_daycount_base() string normalization vectorised
+    normed = raw.astype(str).str.strip().str.upper()
+    normed = normed.str.replace(" ", "", regex=False).str.replace("-", "/", regex=False)
+    for ch in ("(", ")", "[", "]"):
+        normed = normed.str.replace(ch, "", regex=False)
+    normed = normed.str.replace("30/360E", "30E/360", regex=False)
+    normed = normed.str.replace("US", "", regex=False)
+    normed = normed.str.replace("NASD", "", regex=False)
+    normed = normed.str.replace("FIXED", "F", regex=False)
 
-    if invalid_rows:
-        values = sorted({str(v) for v in invalid_values})
-        rows = invalid_rows[:10]
+    result = normed.map(DAYCOUNT_BASE_MAP)
+    result = result.where(~blank_mask, other=None)
+
+    invalid = ~blank_mask & result.isna()
+    if invalid.any():
+        rows = [int(i) + row_offset for i in raw[invalid].index[:10].tolist()]
+        values = sorted({str(v) for v in raw[invalid].head(10).tolist()})
         raise ValueError(
-            f"Bases de calculo no reconocidas en '{column}' para filas {rows}: {values}"
+            f"Unrecognized daycount bases in '{column}' for rows {rows}: {values}"
         )
 
-    return pd.Series(out, index=df.index, dtype="object")
+    return result
+
+
+def _parse_numeric_column(series: pd.Series, *, allow_percent: bool) -> pd.Series:
+    """Vectorised numeric parser handling comma/dot ambiguity and percent signs."""
+    s = series.astype(str).str.strip()
+
+    # Detect percent signs before stripping them
+    has_pct = s.str.contains("%", na=False)
+    s = s.str.replace("%", "", regex=False).str.replace(" ", "", regex=False)
+
+    # Blank / NaN sentinels
+    s = s.replace({"nan": "", "None": "", "none": "", "<NA>": "", "NaN": "", "NaT": ""})
+
+    # Comma/dot ambiguity
+    has_comma = s.str.contains(",", na=False)
+    has_dot = s.str.contains(".", na=False, regex=False)
+    has_both = has_comma & has_dot
+    comma_last = s.str.rfind(",") > s.str.rfind(".")
+
+    # European: 1.000,50 → 1000.50 (both present, comma after dot)
+    euro = has_both & comma_last
+    s = s.where(~euro, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    # US: 1,000.50 → 1000.50 (both present, dot after comma)
+    us = has_both & ~comma_last
+    s = s.where(~us, s.str.replace(",", "", regex=False))
+    # Only comma: 3,25 → 3.25
+    only_comma = has_comma & ~has_dot
+    s = s.where(~only_comma, s.str.replace(",", ".", regex=False))
+
+    s = s.replace({"": pd.NA})
+    parsed = pd.to_numeric(s, errors="coerce")
+
+    # Apply percent division for values that had %
+    if allow_percent and has_pct.any():
+        parsed = parsed.where(~has_pct, parsed / 100.0)
+
+    return parsed
 
 
 def _error_if_invalid_parse(
@@ -160,7 +177,7 @@ def _error_if_invalid_parse(
     rows = [int(i) + row_offset for i in raw[invalid].index[:10].tolist()]
     values = sorted({str(v) for v in raw[invalid].head(10).tolist()})
     raise ValueError(
-        f"No se pudo parsear {kind} en columna '{column}' para filas {rows}: {values}"
+        f"Could not parse {kind} in column '{column}' for rows {rows}: {values}"
     )
 
 
@@ -179,10 +196,10 @@ def _check_required_not_null(
     row_offset: int,
 ) -> None:
     for col in required_columns:
-        missing = df[col].apply(_is_blank_cell)
+        missing = df[col].isna() | df[col].astype(str).str.strip().eq("")
         if missing.any():
             rows = [int(i) + row_offset for i in df.index[missing][:10].tolist()]
-            raise ValueError(f"Columna requerida '{col}' vacia en filas {rows}")
+            raise ValueError(f"Required column '{col}' empty in rows {rows}")
 
 
 def _build_rename_map(
@@ -194,7 +211,7 @@ def _build_rename_map(
         key = _norm_header(col)
         if key in norm_to_source and norm_to_source[key] != col:
             raise ValueError(
-                f"Cabeceras ambiguas tras normalizacion: '{norm_to_source[key]}' y '{col}'"
+                f"Ambiguous headers after normalization: '{norm_to_source[key]}' and '{col}'"
             )
         norm_to_source[key] = col
 
@@ -210,7 +227,7 @@ def _build_rename_map(
         if canonical_col in seen_canonical and seen_canonical[canonical_col] != source_col:
             prev = seen_canonical[canonical_col]
             raise ValueError(
-                f"Dos columnas origen mapean a '{canonical_col}': '{prev}' y '{source_col}'"
+                f"Two source columns map to '{canonical_col}': '{prev}' and '{source_col}'"
             )
 
         rename[source_col] = canonical_col
@@ -279,6 +296,9 @@ def _find_header_row_from_lines(lines: list[str], header_token: str) -> int | No
     return None
 
 
+_HEADER_SEARCH_LINES = 50
+
+
 def _load_csv_table(
     path: Path,
     *,
@@ -288,54 +308,63 @@ def _load_csv_table(
     header_token: str | None,
 ) -> tuple[pd.DataFrame, int]:
     if header_row is None and not header_token:
-        raise ValueError("Para CSV debes indicar header_row o header_token.")
+        raise ValueError("For CSV you must specify header_row or header_token.")
 
     last_error: Exception | None = None
 
     for enc in _iter_csv_encodings(encoding):
+        # Only read first N lines to find the header — avoids loading
+        # the entire file (potentially hundreds of MB) into a Python string.
         try:
-            lines = path.read_text(encoding=enc).splitlines()
+            with open(path, encoding=enc) as fh:
+                head_lines: list[str] = []
+                for _ in range(_HEADER_SEARCH_LINES):
+                    line = fh.readline()
+                    if not line:
+                        break
+                    head_lines.append(line.rstrip("\n\r"))
         except UnicodeDecodeError as exc:
             last_error = exc
             continue
 
         resolved_header_row = 0 if header_row is None else int(header_row)
         if header_token:
-            found = _find_header_row_from_lines(lines, header_token)
+            found = _find_header_row_from_lines(head_lines, header_token)
             if found is None:
                 last_error = ValueError(
-                    f"No se encontro header_token='{header_token}' en {path}"
+                    f"Could not find header_token='{header_token}' in {path}"
                 )
                 continue
             resolved_header_row = found
 
-        if not lines:
+        if not head_lines:
             return pd.DataFrame(), resolved_header_row
 
-        if resolved_header_row < 0 or resolved_header_row >= len(lines):
+        if resolved_header_row < 0 or resolved_header_row >= len(head_lines):
             last_error = ValueError(
-                f"header_row fuera de rango ({resolved_header_row}) en {path}"
+                f"header_row out of range ({resolved_header_row}) in {path}"
             )
             continue
 
-        resolved_delimiter = delimiter or _detect_delimiter_from_line(lines[resolved_header_row])
+        resolved_delimiter = delimiter or _detect_delimiter_from_line(head_lines[resolved_header_row])
         try:
             df = pd.read_csv(
                 path,
                 sep=resolved_delimiter,
                 header=resolved_header_row,
                 encoding=enc,
+                low_memory=False,
             )
         except Exception as exc:
             last_error = exc
             continue
 
-        df = df.dropna(how="all").copy()
+        df = df.dropna(how="all")
         return df, resolved_header_row
 
     if last_error is not None:
-        raise ValueError(f"No se pudo leer CSV '{path}': {last_error}") from last_error
-    raise ValueError(f"No se pudo leer CSV '{path}'.")
+        raise ValueError(f"Could not read CSV '{path}': {last_error}") from last_error
+    raise ValueError(f"Could not read CSV '{path}'.")
 
 
 def _resolve_row_kind_column_name(
@@ -347,11 +376,11 @@ def _resolve_row_kind_column_name(
 
     if isinstance(row_kind_column, int):
         if row_kind_column < 0 or row_kind_column >= len(df.columns):
-            raise ValueError(f"row_kind_column index fuera de rango: {row_kind_column}")
+            raise ValueError(f"row_kind_column index out of range: {row_kind_column}")
         return str(df.columns[row_kind_column])
 
     if row_kind_column not in df.columns:
-        raise ValueError(f"row_kind_column no existe en datos: {row_kind_column}")
+        raise ValueError(f"row_kind_column does not exist in data: {row_kind_column}")
     return row_kind_column
 
 
@@ -367,7 +396,7 @@ def _apply_row_kind_filter(
 
     col_name = _resolve_row_kind_column_name(df, row_kind_column)
     if col_name is None:
-        raise ValueError("include_row_kinds requiere row_kind_column.")
+        raise ValueError("include_row_kinds requires row_kind_column.")
 
     allowed = {str(v).strip().lower() for v in include_row_kinds}
     tags = df[col_name].astype(str).str.strip().str.lower()
@@ -415,11 +444,11 @@ def read_positions_dataframe(
     index_aliases_raw = _mapping_attr_optional(mapping_module, "INDEX_NAME_ALIASES", {})
 
     if not isinstance(numeric_scale_map_raw, Mapping):
-        raise ValueError("NUMERIC_SCALE_MAP debe ser Mapping[columna, factor].")
+        raise ValueError("NUMERIC_SCALE_MAP must be a Mapping[column, factor].")
     if not isinstance(default_values_raw, Mapping):
-        raise ValueError("DEFAULT_CANONICAL_VALUES debe ser Mapping[columna, valor].")
+        raise ValueError("DEFAULT_CANONICAL_VALUES must be a Mapping[column, value].")
     if not isinstance(index_aliases_raw, Mapping):
-        raise ValueError("INDEX_NAME_ALIASES debe ser Mapping[origen, destino].")
+        raise ValueError("INDEX_NAME_ALIASES must be a Mapping[source, target].")
 
     numeric_scale_map = {str(k): float(v) for k, v in numeric_scale_map_raw.items()}
     default_values = {str(k): v for k, v in default_values_raw.items()}
@@ -427,12 +456,12 @@ def read_positions_dataframe(
     if canonical_defaults_override is not None:
         default_values.update({str(k): v for k, v in canonical_defaults_override.items()})
 
-    df = df.dropna(how="all").copy()
+    df = df.dropna(how="all")
     if df.empty:
-        raise ValueError("Fichero de posiciones vacio o sin filas validas.")
+        raise ValueError("Positions file is empty or has no valid rows.")
 
     rename_map = _build_rename_map(df.columns.tolist(), bank_columns_map)
-    df = df.rename(columns=rename_map)
+    df.rename(columns=rename_map, inplace=True)
 
     missing_required = [c for c in required_columns if c not in df.columns and c not in default_values]
     if missing_required:
@@ -441,12 +470,12 @@ def read_positions_dataframe(
             reverse_map.setdefault(canonical_col, []).append(source_col)
 
         details = {
-            col: reverse_map.get(col, ["<sin mapping definido>"])
+            col: reverse_map.get(col, ["<no mapping defined>"])
             for col in missing_required
         }
         raise ValueError(
-            "Faltan columnas canonicas requeridas tras mapping: "
-            f"{missing_required}. Esperadas en origen: {details}"
+            "Missing required canonical columns after mapping: "
+            f"{missing_required}. Expected in source: {details}"
         )
 
     canonical_order = list(dict.fromkeys(required_columns + optional_columns))
@@ -458,7 +487,7 @@ def read_positions_dataframe(
         if col not in df.columns:
             df[col] = value
             continue
-        missing_mask = df[col].apply(_is_blank_cell)
+        missing_mask = df[col].isna() | df[col].astype(str).str.strip().eq("")
         if missing_mask.any():
             df.loc[missing_mask, col] = value
 
@@ -476,20 +505,18 @@ def read_positions_dataframe(
     for col in _DATE_COLUMNS:
         if col not in df.columns:
             continue
-        parsed = df[col].apply(lambda x: _parse_date(x, dayfirst=date_dayfirst))
-        _error_if_invalid_parse(df, col, parsed, "fecha", row_offset=row_offset)
+        parsed = pd.to_datetime(df[col], dayfirst=date_dayfirst, errors="coerce")
+        _error_if_invalid_parse(df, col, parsed, "date", row_offset=row_offset)
         df[col] = parsed
 
     for col in _NUMERIC_COLUMNS:
         if col not in df.columns:
             continue
-        parsed = df[col].apply(
-            lambda x: _parse_number(x, allow_percent=(col in _PERCENT_COLUMNS))
-        )
-        _error_if_invalid_parse(df, col, parsed, "numero", row_offset=row_offset)
+        parsed = _parse_numeric_column(df[col], allow_percent=(col in _PERCENT_COLUMNS))
+        _error_if_invalid_parse(df, col, parsed, "number", row_offset=row_offset)
         scale = float(numeric_scale_map.get(col, 1.0))
         if scale != 1.0:
-            parsed = parsed.apply(lambda x: None if pd.isna(x) else float(x) * scale)
+            parsed = parsed * scale
         df[col] = parsed
 
     if "spread" in df.columns:
@@ -544,20 +571,20 @@ def read_positions_dataframe(
 
     if "rate_type" in df.columns and "index_name" in df.columns:
         float_rows = df["rate_type"] == "float"
-        missing_index = float_rows & df["index_name"].apply(_is_blank_cell)
+        missing_index = float_rows & (df["index_name"].isna() | df["index_name"].astype(str).str.strip().eq(""))
         if missing_index.any():
             rows = [int(i) + row_offset for i in df.index[missing_index][:10].tolist()]
             raise ValueError(
-                "Posiciones float sin index_name (proyeccion) en filas "
+                "Float positions without index_name (projection) in rows "
                 f"{rows}"
             )
 
     if "rate_type" in df.columns and "fixed_rate" in df.columns:
         fixed_rows = df["rate_type"] == "fixed"
-        missing_fixed_rate = fixed_rows & df["fixed_rate"].apply(_is_blank_cell)
+        missing_fixed_rate = fixed_rows & df["fixed_rate"].isna()
         if missing_fixed_rate.any():
             rows = [int(i) + row_offset for i in df.index[missing_fixed_rate][:10].tolist()]
-            raise ValueError(f"Posiciones fixed sin fixed_rate en filas {rows}")
+            raise ValueError(f"Fixed positions without fixed_rate in rows {rows}")
 
     if reset_index:
         return df.reset_index(drop=True)
@@ -633,14 +660,14 @@ def read_tabular_raw(
     header_token: str | None = None,
 ) -> tuple[pd.DataFrame, int]:
     """
-    Lee un CSV/Excel en bruto (sin mapping), devolviendo:
-    - DataFrame con filas no vacias
-    - indice de fila de cabecera detectado/usado
+    Reads a CSV/Excel file in raw form (without mapping), returning:
+    - DataFrame with non-empty rows
+    - detected/used header row index
     """
 
     input_path = Path(path)
     if not input_path.exists():
-        raise FileNotFoundError(f"No existe el fichero de posiciones: {input_path}")
+        raise FileNotFoundError(f"Positions file does not exist: {input_path}")
 
     resolved_type = file_type.lower()
     if resolved_type == "auto":
@@ -650,7 +677,7 @@ def read_tabular_raw(
         elif suffix == ".csv":
             resolved_type = "csv"
         else:
-            raise ValueError(f"Extension no soportada para posiciones: {input_path.suffix}")
+            raise ValueError(f"Unsupported extension for positions: {input_path.suffix}")
 
     if resolved_type == "excel":
         resolved_header_row = 0 if header_row is None else int(header_row)
@@ -669,9 +696,9 @@ def read_tabular_raw(
             header_token=header_token,
         )
     else:
-        raise ValueError(f"file_type no soportado: {file_type}")
+        raise ValueError(f"Unsupported file_type: {file_type}")
 
-    return df_raw.dropna(how="all").copy(), resolved_header_row
+    return df_raw.dropna(how="all"), resolved_header_row
 
 
 def read_positions_excel(

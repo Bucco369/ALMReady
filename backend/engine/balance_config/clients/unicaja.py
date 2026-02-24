@@ -11,7 +11,7 @@ Maintenance guide:
                           then reference the new id here.
 
 Data source columns used:
-  - ``Apartado``     → A (Activo), P (Pasivo), AFB/PFB (Fuera de Balance)
+  - ``Apartado``     → A (Asset), P (Liability), AFB/PFB (Off-Balance Sheet)
   - ``Producto``     → Human-readable product name from Unicaja's core system
   - ``Epigrafe M1``  → BdE M1 regulatory heading (kept for audit, not used
                         in classification — Producto is more granular)

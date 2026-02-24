@@ -13,11 +13,11 @@ def mapping_attr(mapping_module: Any, attr_name: str) -> Any:
     """Get a required attribute from a mapping module or dict; raises on missing."""
     if isinstance(mapping_module, Mapping):
         if attr_name not in mapping_module:
-            raise ValueError(f"mapping_module sin clave requerida: {attr_name}")
+            raise ValueError(f"mapping_module missing required key: {attr_name}")
         return mapping_module[attr_name]
 
     if not hasattr(mapping_module, attr_name):
-        raise ValueError(f"mapping_module sin atributo requerido: {attr_name}")
+        raise ValueError(f"mapping_module missing required attribute: {attr_name}")
     return getattr(mapping_module, attr_name)
 
 

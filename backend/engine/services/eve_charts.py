@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 """
-Graficos de EVE para reporting.
+EVE charts for reporting.
 
-Depende de tablas de analytics (summary y breakdown por bucket) y genera
-figuras listas para comite/diagnostico.
+Depends on analytics tables (summary and bucket breakdown) and generates
+figures ready for committee/diagnostics.
 """
 
 from pathlib import Path
@@ -18,27 +18,27 @@ def plot_eve_scenario_deltas(
     scenario_summary: pd.DataFrame,
     *,
     output_path: str | Path,
-    title: str = "EVE: delta vs base por escenario",
+    title: str = "EVE: delta vs base by scenario",
 ) -> Path:
     """
-    Grafico de barras con delta EVE por escenario frente al base.
+    Bar chart showing delta EVE per scenario vs base.
     """
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "Falta dependencia 'matplotlib'. Instalala para poder graficar: "
+            "Missing dependency 'matplotlib'. Install it to enable plotting: "
             "pip install matplotlib"
         ) from exc
 
     required = {"scenario", "delta_vs_base", "is_worst"}
     missing = sorted(required - set(scenario_summary.columns))
     if missing:
-        raise ValueError(f"scenario_summary sin columnas requeridas: {missing}")
+        raise ValueError(f"scenario_summary missing required columns: {missing}")
 
     plot_df = scenario_summary.loc[scenario_summary["scenario"] != "base"].copy()
     if plot_df.empty:
-        raise ValueError("scenario_summary no contiene escenarios distintos de base.")
+        raise ValueError("scenario_summary does not contain scenarios other than base.")
 
     plot_df = plot_df.sort_values("delta_vs_base", kind="stable").reset_index(drop=True)
     xs = plot_df["scenario"].astype(str).tolist()
@@ -84,34 +84,34 @@ def plot_eve_base_vs_worst_by_bucket(
     *,
     scenario_summary: pd.DataFrame,
     output_path: str | Path,
-    title: str = "EVE por bucket: Base vs Worst",
+    title: str = "EVE by bucket: Base vs Worst",
 ) -> Path:
     """
-    Grafico por bucket comparando Base vs Worst:
-    - barras de activo/pasivo para ambos escenarios
-    - linea de neto para ambos escenarios
+    Bucket chart comparing Base vs Worst:
+    - asset/liability bars for both scenarios
+    - net line for both scenarios
     """
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "Falta dependencia 'matplotlib'. Instalala para poder graficar: "
+            "Missing dependency 'matplotlib'. Install it to enable plotting: "
             "pip install matplotlib"
         ) from exc
 
     required = {"scenario", "bucket_order", "bucket_name", "side_group", "pv_total"}
     missing = sorted(required - set(bucket_breakdown.columns))
     if missing:
-        raise ValueError(f"bucket_breakdown sin columnas requeridas: {missing}")
+        raise ValueError(f"bucket_breakdown missing required columns: {missing}")
 
     worst = worst_scenario_from_summary(scenario_summary)
     if worst is None:
-        raise ValueError("No se pudo identificar worst scenario en scenario_summary.")
+        raise ValueError("Could not identify worst scenario in scenario_summary.")
 
     bb = bucket_breakdown.copy()
     bb = bb.loc[bb["scenario"].isin(["base", worst])].copy()
     if bb.empty:
-        raise ValueError("bucket_breakdown vacio para escenarios base/worst.")
+        raise ValueError("bucket_breakdown is empty for base/worst scenarios.")
 
     sides = bb.loc[bb["side_group"].isin(["asset", "liability", "net"])].copy()
     sides = sides.sort_values(["bucket_order", "scenario", "side_group"], kind="stable")
@@ -146,18 +146,18 @@ def plot_eve_base_vs_worst_by_bucket(
     x_base = [v - (width / 2.0) for v in x]
     x_worst = [v + (width / 2.0) for v in x]
 
-    ax.bar(x_base, base_asset, width=width, color="#98df8a", alpha=0.85, label="Base activo (+)")
-    ax.bar(x_base, base_liab, width=width, color="#ff9896", alpha=0.85, label="Base pasivo (-)")
-    ax.bar(x_worst, worst_asset, width=width, color="#2ca02c", alpha=0.85, label=f"{worst} activo (+)")
-    ax.bar(x_worst, worst_liab, width=width, color="#d62728", alpha=0.85, label=f"{worst} pasivo (-)")
+    ax.bar(x_base, base_asset, width=width, color="#98df8a", alpha=0.85, label="Base asset (+)")
+    ax.bar(x_base, base_liab, width=width, color="#ff9896", alpha=0.85, label="Base liability (-)")
+    ax.bar(x_worst, worst_asset, width=width, color="#2ca02c", alpha=0.85, label=f"{worst} asset (+)")
+    ax.bar(x_worst, worst_liab, width=width, color="#d62728", alpha=0.85, label=f"{worst} liability (-)")
 
-    ax.plot(x_base, base_net, color="#1f77b4", linewidth=1.8, marker="o", markersize=3.5, label="Base neto")
-    ax.plot(x_worst, worst_net, color="#9467bd", linewidth=1.8, marker="o", markersize=3.5, label=f"{worst} neto")
+    ax.plot(x_base, base_net, color="#1f77b4", linewidth=1.8, marker="o", markersize=3.5, label="Base net")
+    ax.plot(x_worst, worst_net, color="#9467bd", linewidth=1.8, marker="o", markersize=3.5, label=f"{worst} net")
 
     ax.axhline(0.0, color="black", linewidth=1.0, alpha=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels(bucket_names, rotation=45, ha="right")
-    ax.set_ylabel("PV por bucket")
+    ax.set_ylabel("PV by bucket")
     ax.set_title(title)
     ax.grid(True, axis="y", alpha=0.25)
     ax.legend(loc="best", ncol=3, fontsize=8)
@@ -175,29 +175,29 @@ def plot_eve_worst_delta_by_bucket(
     *,
     scenario_summary: pd.DataFrame,
     output_path: str | Path,
-    title: str = "Worst EVE: delta por bucket (neto y acumulado)",
+    title: str = "Worst EVE: delta by bucket (net and cumulative)",
 ) -> Path:
     """
-    Grafico del escenario worst:
-    - barras: delta neto por bucket (worst - base)
-    - linea: delta acumulado por bucket
+    Worst scenario chart:
+    - bars: net delta by bucket (worst - base)
+    - line: cumulative delta by bucket
     """
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "Falta dependencia 'matplotlib'. Instalala para poder graficar: "
+            "Missing dependency 'matplotlib'. Install it to enable plotting: "
             "pip install matplotlib"
         ) from exc
 
     required = {"scenario", "bucket_order", "bucket_name", "side_group", "pv_total"}
     missing = sorted(required - set(bucket_breakdown.columns))
     if missing:
-        raise ValueError(f"bucket_breakdown sin columnas requeridas: {missing}")
+        raise ValueError(f"bucket_breakdown missing required columns: {missing}")
 
     worst = worst_scenario_from_summary(scenario_summary)
     if worst is None:
-        raise ValueError("No se pudo identificar worst scenario en scenario_summary.")
+        raise ValueError("Could not identify worst scenario in scenario_summary.")
 
     bb = bucket_breakdown.loc[bucket_breakdown["side_group"] == "net"].copy()
     base = bb.loc[bb["scenario"] == "base", ["bucket_order", "bucket_name", "pv_total"]].rename(
@@ -209,7 +209,7 @@ def plot_eve_worst_delta_by_bucket(
     merged = base.merge(worst_df, on=["bucket_order", "bucket_name"], how="outer").fillna(0.0)
     merged = merged.sort_values("bucket_order", kind="stable").reset_index(drop=True)
     if merged.empty:
-        raise ValueError("Sin datos netos por bucket para base/worst.")
+        raise ValueError("No net data by bucket for base/worst.")
 
     merged["delta"] = merged["pv_worst"].astype(float) - merged["pv_base"].astype(float)
     merged["delta_cum"] = merged["delta"].astype(float).cumsum()
@@ -222,8 +222,8 @@ def plot_eve_worst_delta_by_bucket(
     bar_colors = ["#2ca02c" if v >= 0.0 else "#d62728" for v in delta]
 
     fig, ax = plt.subplots(figsize=(14.5, 6.0))
-    ax.bar(x, delta, color=bar_colors, alpha=0.85, label=f"Delta neto ({worst} - base)")
-    ax.plot(x, delta_cum, color="#1f77b4", linewidth=2.0, marker="o", markersize=3.5, label="Delta acumulado")
+    ax.bar(x, delta, color=bar_colors, alpha=0.85, label=f"Net delta ({worst} - base)")
+    ax.plot(x, delta_cum, color="#1f77b4", linewidth=2.0, marker="o", markersize=3.5, label="Cumulative delta")
     ax.axhline(0.0, color="black", linewidth=1.0, alpha=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha="right")

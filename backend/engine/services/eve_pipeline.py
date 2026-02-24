@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 """
-Pipeline de EVE para ejecucion de extremo a extremo.
+End-to-end EVE pipeline.
 
-Este modulo conecta:
-1) carga de posiciones/fujos,
-2) construccion de curvas base y estresadas,
-3) calculo EVE,
-4) analytics por bucket,
-5) generacion de graficos y export de tablas.
+This module connects:
+1) load positions/flows,
+2) construct base and stressed curves,
+3) calculate EVE,
+4) analytics by bucket,
+5) generate charts and export tables.
 
-Objetivo: ofrecer un punto unico para ejecutar EVE con configuracion declarativa
-sin tocar logica de bajo nivel.
+Goal: offer a single point to run EVE with declarative configuration
+without touching low-level logic.
 """
 
 from collections.abc import Mapping, Sequence
@@ -42,7 +42,7 @@ from engine.services.regulatory_curves import build_regulatory_curve_sets
 
 @dataclass
 class EVEPipelineResult:
-    """Resultado completo de una corrida EVE de pipeline."""
+    """Complete result of a pipeline EVE run."""
 
     analysis_date: date
     method: str
@@ -91,10 +91,10 @@ def load_positions_and_scheduled_flows(
     source_specs: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Carga posiciones canonicas y flujos scheduled (principal) desde SOURCE_SPECS.
+    Load canonical positions and scheduled flows (principal) from SOURCE_SPECS.
 
-    - positions: todas las fuentes tabulares definidas en mapping.
-    - flows: solo las fuentes detectadas como scheduled.
+    - positions: all tabular sources defined in mapping.
+    - flows: only sources detected as scheduled.
     """
     specs = (
         list(source_specs)
@@ -102,7 +102,7 @@ def load_positions_and_scheduled_flows(
         else list(_mapping_attr(mapping_module, "SOURCE_SPECS"))
     )
     if not specs:
-        raise ValueError("SOURCE_SPECS vacio: define al menos una fuente.")
+        raise ValueError("SOURCE_SPECS is empty: define at least one source.")
 
     positions = load_positions_from_specs(
         root_path=positions_root_path,
@@ -147,15 +147,15 @@ def run_eve_from_specs(
     export_tables: bool = True,
 ) -> EVEPipelineResult:
     """
-    Ejecuta EVE completo desde ficheros de entrada declarados por mapping.
+    Run complete EVE from input files declared by mapping.
 
-    Flujo:
-    1) carga posiciones/flujos,
-    2) filtra tipos no soportados en fase actual,
-    3) construye curvas base + escenarios regulatorios,
-    4) calcula EVE (exact o bucketed),
-    5) calcula resumen y breakdown exacto por bucket,
-    6) opcionalmente exporta tablas y grafica.
+    Flow:
+    1) load positions/flows,
+    2) filter unsupported types in current phase,
+    3) build base curves + regulatory scenarios,
+    4) calculate EVE (exact or bucketed),
+    5) calculate summary and exact breakdown by bucket,
+    6) optionally export tables and charts.
     """
     positions, scheduled_flows = load_positions_and_scheduled_flows(
         positions_root_path=positions_root_path,
@@ -230,20 +230,20 @@ def run_eve_from_specs(
         chart_paths["eve_scenario_deltas"] = plot_eve_scenario_deltas(
             scenario_summary,
             output_path=out_dir / "eve_scenario_deltas.png",
-            title="EVE: delta vs base por escenario",
+            title="EVE: delta vs base by scenario",
         )
         if worst_scenario is not None:
             chart_paths["eve_base_vs_worst_by_bucket"] = plot_eve_base_vs_worst_by_bucket(
                 bucket_breakdown,
                 scenario_summary=scenario_summary,
                 output_path=out_dir / "eve_base_vs_worst_by_bucket.png",
-                title=f"EVE por bucket: Base vs {worst_scenario}",
+                title=f"EVE by bucket: Base vs {worst_scenario}",
             )
             chart_paths["eve_worst_delta_by_bucket"] = plot_eve_worst_delta_by_bucket(
                 bucket_breakdown,
                 scenario_summary=scenario_summary,
                 output_path=out_dir / "eve_worst_delta_by_bucket.png",
-                title=f"{worst_scenario}: delta por bucket (neto/acumulado)",
+                title=f"{worst_scenario}: delta by bucket (net/cumulative)",
             )
     if export_tables:
         out_dir.mkdir(parents=True, exist_ok=True)

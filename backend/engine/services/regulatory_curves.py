@@ -38,12 +38,12 @@ def _normalise_specs(
             spec = RegulatoryScenarioSpec(scenario_id=sid, name=sid)
 
         if spec.name in names_seen:
-            raise ValueError(f"Nombre de escenario duplicado: {spec.name!r}")
+            raise ValueError(f"Duplicate scenario name: {spec.name!r}")
         names_seen.add(spec.name)
         out.append(spec)
 
     if not out:
-        raise ValueError("Se requiere al menos un escenario.")
+        raise ValueError("At least one scenario is required.")
     return out
 
 
@@ -59,9 +59,9 @@ def build_regulatory_curve_set(
     preserve_basis_for_non_risk_free: bool = True,
 ) -> ForwardCurveSet:
     """
-    Genera un ForwardCurveSet estresado para un escenario regulatorio.
+    Generate a stressed ForwardCurveSet for a regulatory scenario.
 
-    Regla para indices no risk-free (si preserve_basis_for_non_risk_free=True):
+    Rule for non risk-free indices (if preserve_basis_for_non_risk_free=True):
       idx_stressed(t) = rf_stressed(t) + (idx_base(t) - rf_base(t))
     """
     _validate_curve_points_columns(base_set.points)
@@ -120,7 +120,7 @@ def build_regulatory_curve_sets(
     preserve_basis_for_non_risk_free: bool = True,
 ) -> dict[str, ForwardCurveSet]:
     """
-    Ejecuta varios escenarios y devuelve name -> ForwardCurveSet.
+    Execute multiple scenarios and return name -> ForwardCurveSet.
     """
     specs = _normalise_specs(scenarios)
     out: dict[str, ForwardCurveSet] = {}

@@ -498,8 +498,10 @@ def calculate_whatif(session_id: str, req: WhatIfCalculateRequest) -> WhatIfResu
     worst_scenario = calc_params.get("worst_case_scenario", "base")
 
     # 2. Load motor positions (for removes)
+    # Check both Parquet (new) and JSON (legacy) paths
     motor_path = _motor_positions_path(session_id)
-    if motor_path.exists():
+    motor_json_path = motor_path.with_suffix(".json")
+    if motor_path.exists() or motor_json_path.exists():
         motor_df = _reconstruct_motor_dataframe(session_id)
     else:
         motor_df = pd.DataFrame()

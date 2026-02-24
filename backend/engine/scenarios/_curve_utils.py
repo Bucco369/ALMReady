@@ -13,7 +13,7 @@ def validate_curve_points_columns(df_points: pd.DataFrame) -> None:
     missing = [c for c in required if c not in df_points.columns]
     if missing:
         raise ValueError(
-            "ForwardCurveSet.points no contiene columnas requeridas: "
+            "ForwardCurveSet.points is missing required columns: "
             f"{missing}"
         )
 

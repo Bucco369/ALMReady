@@ -6,16 +6,16 @@ from typing import Optional, Union
 import pandas as pd
 
 from engine.core.tenors import add_tenor
-from engine.core.daycount import normalizar_base_de_calculo, yearfrac
+from engine.core.daycount import normalize_daycount_base, yearfrac
 
 
 def _parse_rate(x) -> Optional[float]:
     """
-    Convierte rates que vengan como:
-      - número (0.03)
+    Convert rates from various formats:
+      - number (0.03)
       - string '0.03'
-      - porcentaje '3.25%' o '3,25%'
-    Devuelve float en formato decimal (0.0325).
+      - percentage '3.25%' or '3,25%'
+    Returns float in decimal format (0.0325).
     """
     if pd.isna(x):
         return None
@@ -43,29 +43,29 @@ def read_forward_curves_wide(
     sheet_name: Union[int, str] = 0,
 ) -> pd.DataFrame:
     """
-    Lee el Excel de curvas en formato WIDE:
-      Col A: IndexName (desde fila 2 hacia abajo)
-      Col B..: tenores (headers 1M, 3M, 1Y...)
-      Celdas: forward rate
+    Read forward curves Excel in WIDE format:
+      Col A: IndexName (from row 2 downward)
+      Col B..: tenors (headers 1M, 3M, 1Y...)
+      Cells: forward rate
 
-    Devuelve un DataFrame con columna 'IndexName' + columnas tenor.
+    Returns a DataFrame with 'IndexName' column + tenor columns.
     """
     df = pd.read_excel(path, sheet_name=sheet_name, header=0, engine="openpyxl")
     df = df.dropna(how="all")
 
     if df.shape[1] < 2:
         raise ValueError(
-            "Formato inesperado: se esperaba 1a columna = índices y columnas B.. = tenores."
+            "Unexpected format: expected 1st column = indices and columns B.. = tenors."
         )
 
     first_col = df.columns[0]
     df = df.rename(columns={first_col: "IndexName"})
 
-    # Limpieza básica
+    # Basic cleanup
     df["IndexName"] = df["IndexName"].astype(str).str.strip()
     df = df[df["IndexName"].notna() & (df["IndexName"] != "")]
 
-    # Quita columnas basura típicas ("Unnamed: ...") si existieran
+    # Remove junk columns ("Unnamed: ...") if present
     df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed:")]
 
     return df
@@ -73,15 +73,15 @@ def read_forward_curves_wide(
 
 def wide_to_long(df_wide: pd.DataFrame) -> pd.DataFrame:
     """
-    Convierte WIDE -> LONG:
+    Convert WIDE -> LONG:
       IndexName | Tenor | FwdRate
     """
     if "IndexName" not in df_wide.columns:
-        raise ValueError("Falta columna 'IndexName' en df_wide.")
+        raise ValueError("Missing 'IndexName' column in df_wide.")
 
     tenor_cols = list(df_wide.columns[1:])
     if not tenor_cols:
-        raise ValueError("No hay columnas de tenores (B..end).")
+        raise ValueError("No tenor columns found (B..end).")
 
     df_long = df_wide.melt(
         id_vars=["IndexName"],
@@ -106,27 +106,27 @@ def enrich_with_dates(
     base: str = "ACT/365",
 ) -> pd.DataFrame:
     """
-    Añade:
+    Add:
       - TenorDate = analysis_date + Tenor
-      - YearFrac = yearfrac(analysis_date, TenorDate, base_normalizada)
+      - YearFrac = yearfrac(analysis_date, TenorDate, normalized_base)
 
-    Valida tenores: si hay alguno no soportado, falla con error claro.
+    Validates tenors: if any are unsupported, raises a clear error.
     """
     if df_long.empty:
-        raise ValueError("df_long está vacío: no hay puntos de curva (rates) que procesar.")
+        raise ValueError("df_long is empty: no curve points (rates) to process.")
 
-    b = normalizar_base_de_calculo(base)
+    b = normalize_daycount_base(base)
 
-    tenores_unicos = sorted(df_long["Tenor"].unique().tolist())
-    tenores_invalidos = []
-    for t in tenores_unicos:
+    unique_tenors = sorted(df_long["Tenor"].unique().tolist())
+    invalid_tenors = []
+    for t in unique_tenors:
         try:
             add_tenor(analysis_date, t)
         except Exception:
-            tenores_invalidos.append(t)
+            invalid_tenors.append(t)
 
-    if tenores_invalidos:
-        raise ValueError(f"Tenores no soportados encontrados en el Excel: {tenores_invalidos}")
+    if invalid_tenors:
+        raise ValueError(f"Unsupported tenors found in Excel: {invalid_tenors}")
 
     df_long = df_long.copy()
     df_long["TenorDate"] = df_long["Tenor"].apply(lambda t: add_tenor(analysis_date, t))
@@ -141,8 +141,8 @@ def load_forward_curves(
     sheet_name: Union[int, str] = 0,
 ) -> pd.DataFrame:
     """
-    Pipeline completo:
-      Excel (wide) -> long -> con fechas y yearfrac
+    Full pipeline:
+      Excel (wide) -> long -> with dates and yearfrac
     """
     df_wide = read_forward_curves_wide(path, sheet_name=sheet_name)
     df_long = wide_to_long(df_wide)

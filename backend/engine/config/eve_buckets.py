@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 """
-Buckets temporales para EVE en modo bucketed.
+Time buckets for EVE in bucketed mode.
 
-Se definen de forma declarativa para poder cambiarlos sin tocar el motor.
-Unidad: anios.
+Defined declaratively so they can be changed without touching the engine.
+Unit: years.
 """
 
 
@@ -30,9 +30,9 @@ DEFAULT_REGULATORY_BUCKETS: tuple[dict[str, float | str | None], ...] = (
 )
 
 
-# Rejilla recomendada para visualizacion ALCO:
-# - mas detalle en corto plazo (<1Y)
-# - granularidad progresiva en tramos largos
+# Recommended grid for ALCO visualization:
+# - more detail in short term (<1Y)
+# - progressive granularity in long-term buckets
 EVE_VIS_BUCKETS_OPTIMAL: tuple[dict[str, float | str | None], ...] = (
     {"name": "0-1M", "start_years": 0.0, "end_years": 1.0 / 12.0},
     {"name": "1-3M", "start_years": 1.0 / 12.0, "end_years": 3.0 / 12.0},

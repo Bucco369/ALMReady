@@ -23,11 +23,11 @@ class EVEBucket:
         return t <= float(self.end_years)
 
     def representative_t(self, *, open_ended_years: float = 10.0) -> float:
-        """Punto medio del bucket, usado para descuento y aplicacion de shocks.
+        """Midpoint of the bucket, used for discounting and applying shocks.
 
-        Para el bucket abierto (>20Y), el default open_ended_years=10.0 produce
-        un midpoint de 25 anios (20 + 10/2), alineado con la convencion
-        regulatoria BCBS d368 y EBA-GL-2022/14 que asume un rango 20-30Y.
+        For the open bucket (>20Y), the default open_ended_years=10.0 produces
+        a midpoint of 25 years (20 + 10/2), aligned with the regulatory
+        convention BCBS d368 and EBA-GL-2022/14 which assumes a 20-30Y range.
         """
         start = max(0.0, float(self.start_years))
         if self.end_years is None:
@@ -52,7 +52,7 @@ def normalise_buckets(
     """
     raw = list(default if buckets is None else buckets)
     if not raw:
-        raise ValueError("Se requiere al menos un bucket.")
+        raise ValueError("At least one bucket is required.")
 
     out: list[EVEBucket] = []
     for i, b in enumerate(raw, start=1):
@@ -60,7 +60,7 @@ def normalise_buckets(
             candidate = b
         else:
             if not isinstance(b, Mapping):
-                raise ValueError(f"Bucket invalido en posicion {i}: {type(b)}")
+                raise ValueError(f"Invalid bucket at position {i}: {type(b)}")
             candidate = EVEBucket(
                 name=str(b.get("name", f"bucket_{i}")),
                 start_years=float(b.get("start_years", 0.0)),
@@ -69,7 +69,7 @@ def normalise_buckets(
 
         if candidate.end_years is not None and float(candidate.end_years) <= float(candidate.start_years):
             raise ValueError(
-                f"Bucket con end_years <= start_years: {candidate.name!r} "
+                f"Bucket with end_years <= start_years: {candidate.name!r} "
                 f"({candidate.start_years}, {candidate.end_years})"
             )
         out.append(candidate)

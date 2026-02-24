@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 
 from engine.config.eve_buckets import DEFAULT_REGULATORY_BUCKETS
-from engine.core.daycount import normalizar_base_de_calculo, yearfrac
+from engine.core.daycount import normalize_daycount_base, yearfrac
 from engine.services._eve_utils import EVEBucket, normalise_buckets as _normalise_buckets_shared
 from engine.services.market import ForwardCurveSet
 from engine.services.nii_projectors import (
@@ -107,7 +107,7 @@ def _build_coupon_dates(
         d = d_next
         guard += 1
         if guard > 10_000:
-            raise RuntimeError("Bucle inesperado al generar fechas de cupon EVE.")
+            raise RuntimeError("Unexpected loop while generating EVE coupon dates.")
     out.append(maturity_date)
     return out
 
@@ -171,10 +171,10 @@ def _positions_by_supported_type(positions: pd.DataFrame) -> dict[str, pd.DataFr
         )
         if unknown:
             raise NotImplementedError(
-                "EVE soporta source_contract_type en "
+                "EVE supports source_contract_type in "
                 "['fixed_annuity', 'fixed_bullet', 'fixed_linear', 'fixed_scheduled', "
                 "'variable_annuity', 'variable_bullet', 'variable_linear', 'variable_scheduled']. "
-                f"Tipos presentes no implementados: {unknown}"
+                f"Unimplemented types found: {unknown}"
             )
 
         out: dict[str, pd.DataFrame] = {}
@@ -186,7 +186,7 @@ def _positions_by_supported_type(positions: pd.DataFrame) -> dict[str, pd.DataFr
 
     if "rate_type" not in positions.columns or "maturity_date" not in positions.columns:
         raise ValueError(
-            "positions no contiene 'source_contract_type' ni columnas fallback "
+            "positions does not contain 'source_contract_type' or fallback columns "
             "('rate_type', 'maturity_date')."
         )
 
@@ -222,7 +222,7 @@ def _extend_fixed_bullet_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in FIXED_BULLET_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -230,11 +230,11 @@ def _extend_fixed_bullet_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         notional = coerce_float(row.notional, field_name="notional", row_id=row_id)
         fixed_rate = coerce_float(row.fixed_rate, field_name="fixed_rate", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         payment_frequency = _frequency_from_row_with_default(
             row,
@@ -288,7 +288,7 @@ def _extend_fixed_linear_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in FIXED_LINEAR_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -296,11 +296,11 @@ def _extend_fixed_linear_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         fixed_rate = coerce_float(row.fixed_rate, field_name="fixed_rate", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         cycle_start = max(start_date, analysis_date)
         if maturity_date <= cycle_start:
@@ -369,7 +369,7 @@ def _extend_fixed_annuity_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in FIXED_ANNUITY_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -377,11 +377,11 @@ def _extend_fixed_annuity_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         fixed_rate = coerce_float(row.fixed_rate, field_name="fixed_rate", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         cycle_start = max(start_date, analysis_date)
         if maturity_date <= cycle_start:
@@ -454,7 +454,7 @@ def _extend_variable_bullet_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in VARIABLE_BULLET_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -462,11 +462,11 @@ def _extend_variable_bullet_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         notional = coerce_float(row.notional, field_name="notional", row_id=row_id)
         spread = coerce_float(row.spread, field_name="spread", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         index_name = str(row.index_name).strip()
         projection_curve_set.get(index_name)
@@ -579,7 +579,7 @@ def _extend_variable_linear_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in VARIABLE_LINEAR_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -587,11 +587,11 @@ def _extend_variable_linear_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         spread = coerce_float(row.spread, field_name="spread", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         index_name = str(row.index_name).strip()
         projection_curve_set.get(index_name)
@@ -732,7 +732,7 @@ def _extend_variable_annuity_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in VARIABLE_ANNUITY_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -740,11 +740,11 @@ def _extend_variable_annuity_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         spread = coerce_float(row.spread, field_name="spread", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         index_name = str(row.index_name).strip()
         projection_curve_set.get(index_name)
@@ -845,7 +845,7 @@ def _extend_variable_annuity_cashflows(
                 balance = max(0.0, balance - principal)
                 prev = pay_date
 
-            # Si el reset cae entre cupones, acumulamos el stub al final del regimen.
+            # If the reset falls between coupons, accrue the stub to the end of the regime.
             if balance > 1e-10 and regime_end > prev:
                 stub_interest = balance * regime_rate * yearfrac(prev, regime_end, base)
                 _add_flow(flow_map, flow_date=regime_end, interest_amount=sign * stub_interest)
@@ -876,7 +876,7 @@ def _extend_fixed_scheduled_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in FIXED_SCHEDULED_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -884,11 +884,11 @@ def _extend_fixed_scheduled_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         fixed_rate = coerce_float(row.fixed_rate, field_name="fixed_rate", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         cycle_start = max(start_date, analysis_date)
         if maturity_date <= cycle_start:
@@ -955,7 +955,7 @@ def _extend_variable_scheduled_cashflows(
         row_id = getattr(row, "contract_id", "<missing>")
         for col in VARIABLE_SCHEDULED_REQUIRED_COLUMNS:
             if is_blank(getattr(row, col, None)):
-                raise ValueError(f"Valor requerido vacio en {col!r} para contract_id={row_id!r}")
+                raise ValueError(f"Required value is empty in {col!r} for contract_id={row_id!r}")
 
         contract_id = str(row.contract_id).strip()
         start_date = coerce_date(row.start_date, field_name="start_date", row_id=row_id)
@@ -963,11 +963,11 @@ def _extend_variable_scheduled_cashflows(
         if maturity_date <= analysis_date:
             continue
         if maturity_date < start_date:
-            raise ValueError(f"maturity_date < start_date para contract_id={row_id!r}")
+            raise ValueError(f"maturity_date < start_date for contract_id={row_id!r}")
 
         outstanding = coerce_float(row.notional, field_name="notional", row_id=row_id)
         spread = coerce_float(row.spread, field_name="spread", row_id=row_id)
-        base = normalizar_base_de_calculo(str(row.daycount_base))
+        base = normalize_daycount_base(str(row.daycount_base))
         sign = side_sign(row.side, row_id=row_id)
         index_name = str(row.index_name).strip()
         projection_curve_set.get(index_name)
@@ -1074,11 +1074,11 @@ def build_eve_cashflows(
     scheduled_principal_flows: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
-    Construye cashflows de run-off para EVE.
+    Builds run-off cashflows for EVE.
 
-    Los importes salen signed:
-    - activo -> positivo
-    - pasivo -> negativo
+    Amounts are signed:
+    - asset -> positive
+    - liability -> negative
     """
     groups = _positions_by_supported_type(positions)
     if not groups:
@@ -1098,14 +1098,14 @@ def build_eve_cashflows(
 
     variable_present = any(k.startswith("variable_") for k in groups.keys())
     if variable_present and projection_curve_set is None:
-        raise ValueError("projection_curve_set es requerido para instrumentos variables en EVE.")
+        raise ValueError("projection_curve_set is required for variable instruments in EVE.")
 
     has_scheduled = ("fixed_scheduled" in groups) or ("variable_scheduled" in groups)
     flows_by_contract: dict[str, list[tuple[date, float]]] = {}
     if has_scheduled:
         if scheduled_principal_flows is None:
             raise ValueError(
-                "Se han recibido posiciones scheduled pero falta scheduled_principal_flows."
+                "Scheduled positions received but scheduled_principal_flows is missing."
             )
         flows_by_contract = prepare_scheduled_principal_flows(scheduled_principal_flows)
 
@@ -1228,7 +1228,7 @@ def build_bucketed_cashflow_table(
 ) -> pd.DataFrame:
     norm_buckets = _normalise_buckets(buckets)
     discount_curve = discount_curve_set.get(discount_index)
-    base = normalizar_base_de_calculo(discount_curve_set.base)
+    base = normalize_daycount_base(discount_curve_set.base)
 
     if cashflows.empty:
         return pd.DataFrame(
@@ -1247,7 +1247,7 @@ def build_bucketed_cashflow_table(
     flow_work["flow_date"] = pd.to_datetime(flow_work["flow_date"], errors="coerce").dt.date
     if flow_work["flow_date"].isna().any():
         rows = [int(i) + 2 for i in flow_work.index[flow_work["flow_date"].isna()][:10].tolist()]
-        raise ValueError(f"Cashflows con flow_date invalida en filas {rows}")
+        raise ValueError(f"Cashflows with invalid flow_date in rows {rows}")
 
     flow_work["t_years"] = flow_work["flow_date"].apply(
         lambda d: _cashflow_yearfrac(
@@ -1324,7 +1324,7 @@ def run_eve_base(
 ) -> float:
     projection_set = discount_curve_set if projection_curve_set is None else projection_curve_set
     if projection_set.analysis_date != discount_curve_set.analysis_date:
-        raise ValueError("analysis_date debe coincidir entre projection_curve_set y discount_curve_set.")
+        raise ValueError("analysis_date must match between projection_curve_set and discount_curve_set.")
 
     cashflows = build_eve_cashflows(
         positions,
@@ -1349,7 +1349,7 @@ def run_eve_base(
             open_ended_bucket_years=open_ended_bucket_years,
         )
 
-    raise ValueError("method debe ser 'exact' o 'bucketed'.")
+    raise ValueError("method must be 'exact' or 'bucketed'.")
 
 
 def run_eve_scenarios(
@@ -1391,7 +1391,7 @@ def run_eve_scenarios(
     for scenario_name, scenario_discount_set in scenario_discount_curve_sets.items():
         if scenario_name not in scenario_projection:
             raise KeyError(
-                f"Falta projection curve set para escenario {scenario_name!r}."
+                f"Missing projection curve set for scenario {scenario_name!r}."
             )
         scenario_values[str(scenario_name)] = run_eve_base(
             positions,

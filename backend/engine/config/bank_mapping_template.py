@@ -1,9 +1,9 @@
 """
-Template de mapping banco -> esquema canonico ALMReady.
+Template for bank -> ALMReady canonical schema mapping.
 
-Cada banco puede copiar este archivo a:
+Each bank can copy this file to:
   engine/config/bank_mapping_<bank>.py
-y ajustar diccionarios/config sin tocar el motor.
+and adjust dictionaries/config without touching the engine.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 # Canonical schema
 # ============================================================================
 
-# Campos canonicos minimos para NII (MVP).
+# Minimum canonical fields for NII (MVP).
 REQUIRED_CANONICAL_COLUMNS = (
     "contract_id",
     "start_date",
@@ -24,15 +24,15 @@ REQUIRED_CANONICAL_COLUMNS = (
     "daycount_base",
 )
 
-# Campos opcionales ya preparados para siguientes iteraciones.
-# `annuity_payment_mode` aplica solo a `source_contract_type=variable_annuity`.
-# Valores admitidos por contrato:
-# - "reprice_on_reset": modo legacy/default (recalcula cuota en cada reset)
-# - "fixed_payment": cuota fija durante el ciclo
-# Prioridad:
-# 1) valor informado en la fila (`annuity_payment_mode`)
-# 2) parametro global del run (`variable_annuity_payment_mode`)
-# 3) fallback del motor: "reprice_on_reset"
+# Optional fields prepared for future iterations.
+# `annuity_payment_mode` applies only to `source_contract_type=variable_annuity`.
+# Allowed values per contract:
+# - "reprice_on_reset": legacy/default mode (recalculates payment at each reset)
+# - "fixed_payment": fixed payment during the cycle
+# Priority:
+# 1) value provided in the row (`annuity_payment_mode`)
+# 2) global run parameter (`variable_annuity_payment_mode`)
+# 3) engine fallback: "reprice_on_reset"
 OPTIONAL_CANONICAL_COLUMNS = (
     "index_name",
     "spread",
@@ -45,7 +45,7 @@ OPTIONAL_CANONICAL_COLUMNS = (
     "cap_rate",
 )
 
-# Columnas entrada -> canonico.
+# Input columns -> canonical.
 BANK_COLUMNS_MAP = {
     "Contract ID": "contract_id",
     "Start Date": "start_date",
@@ -65,7 +65,7 @@ BANK_COLUMNS_MAP = {
     "Cap Rate": "cap_rate",
 }
 
-# Normalizacion lado -> canonico {A, L}.
+# Normalize side -> canonical {A, L}.
 SIDE_MAP = {
     "A": "A",
     "ASSET": "A",
@@ -77,7 +77,7 @@ SIDE_MAP = {
     "SHORT": "L",
 }
 
-# Normalizacion tipo -> canonico {fixed, float}.
+# Normalize rate type -> canonical {fixed, float}.
 RATE_TYPE_MAP = {
     "FIXED": "fixed",
     "FIJO": "fixed",
@@ -103,9 +103,9 @@ NUMERIC_SCALE_MAP = {}
 # Default canonical values injected when source column is missing/blank.
 # Example:
 #   {"daycount_base": "ACT/360", "rate_type": "fixed"}
-# Para forzar un modo por banco sin tocar codigo:
+# To force a mode per bank without touching code:
 #   {"annuity_payment_mode": "fixed_payment"}
-# (si llega un valor por fila, ese valor de fila prevalece).
+# (if a per-row value is provided, the row value takes precedence).
 DEFAULT_CANONICAL_VALUES = {}
 
 # Optional aliases to normalize index names from positions to curve names.
@@ -149,9 +149,9 @@ UNMAPPED_PREFIX = "extra_"
 # ]
 SOURCE_SPECS = []
 
-# Nota scheduled (reader jerarquico):
-# Para ficheros con filas `contract` + `payment`, usa
-# io.scheduled_reader.load_scheduled_from_specs con specs como:
+# Note on scheduled (hierarchical reader):
+# For files with `contract` + `payment` rows, use
+# io.scheduled_reader.load_scheduled_from_specs with specs like:
 # {
 #   "name": "fixed_scheduled",
 #   "pattern": "Fixed scheduled.csv",

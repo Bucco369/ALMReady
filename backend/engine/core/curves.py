@@ -9,10 +9,10 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class CurvePoint:
-    year_frac: float      # T (años)
-    rate: float           # r(T) en decimal (asumimos comp. continua para DF)
+    year_frac: float      # T (years)
+    rate: float           # r(T) in decimal (assuming continuous compounding for DF)
     tenor: str            # "ON", "1M", ...
-    tenor_date: date      # fecha pilar (analysis_date + tenor)
+    tenor_date: date      # pillar date (analysis_date + tenor)
 
 
 @dataclass
@@ -22,17 +22,17 @@ class ForwardCurve:
 
     def __post_init__(self) -> None:
         if not self.points:
-            raise ValueError(f"Curva '{self.index_name}' sin puntos.")
+            raise ValueError(f"Curve '{self.index_name}' has no points.")
 
         self.points.sort(key=lambda p: p.year_frac)
 
-        # Validación: T estrictamente creciente
+        # Validation: T must be strictly increasing
         prev = None
         for p in self.points:
             if prev is not None and p.year_frac <= prev:
                 raise ValueError(
-                    f"Curva '{self.index_name}' tiene YearFrac no estrictamente creciente "
-                    f"(duplicado o desorden)."
+                    f"Curve '{self.index_name}' has non-strictly-increasing YearFrac "
+                    f"(duplicate or out of order)."
                 )
             prev = p.year_frac
 
@@ -44,9 +44,9 @@ class ForwardCurve:
     def rates(self) -> list[float]:
         return [p.rate for p in self.points]
 
-    # ---------- Nucleo: log-lineal en DF ----------
+    # ---------- Core: log-linear in DF ----------
     def _pillar_ln_dfs(self) -> list[float]:
-        # ln(DF_i) = -r_i * T_i (comp. continua)
+        # ln(DF_i) = -r_i * T_i (continuous compounding)
         return [-p.rate * p.year_frac for p in self.points]
 
     @staticmethod
@@ -58,21 +58,21 @@ class ForwardCurve:
 
     def discount_factor(self, t: float) -> float:
         """
-        DF(t) con interpolacion log-lineal en ln(DF):
-        - Para 0 < t < primer pilar: interpola entre (0, lnDF=0) y primer pilar.
-        - Entre pilares: interpolacion lineal en lnDF.
-        - Para t > ultimo pilar: extrapolacion (no interpolacion), usando la
-          pendiente del ultimo tramo en ln(DF).
+        DF(t) with log-linear interpolation in ln(DF):
+        - For 0 < t < first pillar: interpolate between (0, lnDF=0) and first pillar.
+        - Between pillars: linear interpolation in lnDF.
+        - For t > last pillar: extrapolation (not interpolation), using the
+          slope of the last segment in ln(DF).
 
-        Nota de modelizacion para cola larga:
-        - Esta extrapolacion implica "flat forward instantaneo" en cola
-          (constante la pendiente de ln(DF)).
-        - NO implica "flat zero rate".
-        - Si se requiere otra cola (p.ej. convergencia a UFR), debe
-          implementarse como modo alternativo explicito.
+        Modeling note for the long tail:
+        - This extrapolation implies "flat instantaneous forward" in the tail
+          (constant slope in ln(DF)).
+        - It does NOT imply "flat zero rate".
+        - If another tail behavior is needed (e.g. convergence to UFR), it must
+          be implemented as an explicit alternative mode.
         """
         if t is None:
-            raise ValueError("t no puede ser None.")
+            raise ValueError("t cannot be None.")
         t = float(t)
 
         if t <= 0.0:
@@ -95,9 +95,9 @@ class ForwardCurve:
             return exp(ln_df_t)
 
         if t >= xs[-1]:
-            # Fuera del dominio de pilares: aqui no hay interpolacion posible.
-            # Se extrapola linealmente ln(DF) con la pendiente del ultimo tramo.
-            # Equivale a forward instantaneo constante en cola.
+            # Beyond the pillar domain: no interpolation possible here.
+            # Extrapolate ln(DF) linearly using the slope of the last segment.
+            # Equivalent to constant instantaneous forward in the tail.
             ln_df_t = self._interp_linear(
                 t,
                 xs[-2],
@@ -124,13 +124,13 @@ class ForwardCurve:
         """
         t = float(t)
         if t <= 0.0:
-            # no está definida en 0; devolvemos el primer pilar como convención
+            # not defined at 0; return first pillar rate as convention
             return float(self.points[0].rate)
 
         df = self.discount_factor(t)
         return -log(df) / t
 
-    # Conveniencia: si tú piensas “rate(t)” que sea el zero_rate equivalente
+    # Convenience: rate(t) is an alias for zero_rate(t)
     def rate(self, t: float) -> float:
         return self.zero_rate(t)
 
@@ -147,16 +147,16 @@ def curve_from_long_df(
     required = [col_index, col_tenor, col_rate, col_tenor_date, col_year_frac]
     missing = [c for c in required if c not in df_long.columns]
     if missing:
-        raise ValueError(f"df_long no tiene columnas requeridas: {missing}")
+        raise ValueError(f"df_long is missing required columns: {missing}")
 
     sub = df_long[df_long[col_index] == index_name].copy()
     if sub.empty:
-        raise ValueError(f"No hay puntos para IndexName='{index_name}'.")
+        raise ValueError(f"No points found for IndexName='{index_name}'.")
 
     if sub[col_year_frac].isna().any():
-        raise ValueError(f"Curva '{index_name}' tiene YearFrac nulo.")
+        raise ValueError(f"Curve '{index_name}' has null YearFrac.")
     if sub[col_rate].isna().any():
-        raise ValueError(f"Curva '{index_name}' tiene FwdRate nulo.")
+        raise ValueError(f"Curve '{index_name}' has null FwdRate.")
 
     points: list[CurvePoint] = []
     for _, r in sub.iterrows():

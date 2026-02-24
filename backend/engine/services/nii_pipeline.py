@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 """
-Pipeline de NII para ejecucion de extremo a extremo.
+End-to-end NII pipeline.
 
-Este modulo conecta:
-1) carga de posiciones/flows,
-2) curvas base + escenarios,
-3) calculo NII 12M,
-4) perfil mensual para visualizacion,
-5) grafico mensual base/up/down.
+This module connects:
+1) load positions/flows,
+2) base curves + scenarios,
+3) NII 12M calculation,
+4) monthly profile for visualization,
+5) monthly base/up/down chart.
 """
 
 from collections.abc import Mapping, Sequence
@@ -35,7 +35,7 @@ from engine.services.regulatory_curves import build_regulatory_curve_sets
 
 @dataclass
 class NIIPipelineResult:
-    """Resultado agregado de la corrida NII de pipeline."""
+    """Aggregated result of the NII pipeline run."""
 
     analysis_date: date
     base_nii_12m: float
@@ -84,14 +84,14 @@ def run_nii_from_specs(
     monthly_chart_scenarios: Sequence[str] = ("base", "parallel-up", "parallel-down"),
 ) -> NIIPipelineResult:
     """
-    Ejecuta NII desde inputs declarativos y genera (opcional) grafico mensual.
+    Run NII from declarative inputs and optionally generate a monthly chart.
 
-    Mantiene el calculo de NII exacto existente; el perfil mensual se deriva del
-    mismo motor para reporting.
+    Preserves the existing exact NII calculation; the monthly profile is derived
+    from the same engine for reporting.
 
-    `variable_annuity_payment_mode` controla el default global de
-    variable_annuity cuando la columna `annuity_payment_mode` no viene en datos.
-    Valores: "reprice_on_reset" | "fixed_payment".
+    `variable_annuity_payment_mode` controls the global default for
+    variable_annuity when the `annuity_payment_mode` column is absent from data.
+    Values: "reprice_on_reset" | "fixed_payment".
     """
     positions, scheduled_flows = load_positions_and_scheduled_flows(
         positions_root_path=positions_root_path,
@@ -159,7 +159,7 @@ def run_nii_from_specs(
             run_out.monthly_profile,
             output_path=out_chart_path,
             scenarios=tuple(str(s) for s in monthly_chart_scenarios),
-            title_prefix="NII mensual (12M)",
+            title_prefix="Monthly NII (12M)",
         )
 
         if run_out.run_result.scenario_nii_12m:
@@ -183,7 +183,7 @@ def run_nii_from_specs(
                 run_out.monthly_profile,
                 worst_scenario=str(worst_scenario),
                 output_path=out_base_vs_worst_chart_path,
-                title=f"NII por mes: Base vs {worst_scenario}",
+                title=f"NII by month: Base vs {worst_scenario}",
             )
 
     return NIIPipelineResult(

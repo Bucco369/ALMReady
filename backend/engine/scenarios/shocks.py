@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ParallelShock:
     """
-    Shock paralelo en basis points para sumar sobre FwdRate.
+    Parallel shock in basis points to add on top of FwdRate.
     """
 
     name: str
