@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 import sys
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -15,7 +15,9 @@ _DEFAULT_CURVE_FILE = _PROJECT_ROOT / "Inputs" / "Curve tenors_input.xlsx"
 _DEFAULT_ANALYSIS_DATE = "2025-12-31"
 _DEFAULT_BASE = "ACT/360"
 _DEFAULT_SHEET = "0"
-_DEFAULT_OUT = _PROJECT_ROOT / "almready" / "tests" / "out" / "forward_curves.png"
+_REPO_ROOT = _PROJECT_ROOT.parent
+_DATA_ROOT = _REPO_ROOT.parent / "data"
+_DEFAULT_OUT = _DATA_ROOT / "out" / "forward_curves.png"
 
 
 def _parse_sheet(value: str):
