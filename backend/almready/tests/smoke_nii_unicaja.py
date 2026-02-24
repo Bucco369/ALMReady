@@ -5,7 +5,8 @@ from datetime import date
 from pathlib import Path
 import sys
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]   # backend/
+_REPO_ROOT = _PROJECT_ROOT.parent                     # repository root
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -26,7 +27,7 @@ def _parse_sheet(value: str) -> int | str:
 
 
 def _default_curve_file() -> Path:
-    curves_dir = _PROJECT_ROOT / "almready" / "tests" / "fixtures" / "curves" / "forwards"
+    curves_dir = _REPO_ROOT / "tests" / "fixtures" / "curves" / "forwards"
     if not curves_dir.exists():
         return curves_dir / "curve_input.xlsx"
     matches = sorted(curves_dir.glob("*.xlsx"))
@@ -41,7 +42,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--positions-root",
-        default=str(_PROJECT_ROOT / "almready" / "tests" / "fixtures" / "positions" / "unicaja"),
+        default=str(_REPO_ROOT / "tests" / "fixtures" / "positions" / "unicaja"),
         help="Ruta carpeta con CSV de posiciones Unicaja.",
     )
     parser.add_argument(
@@ -82,7 +83,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--chart-out",
-        default=str(_PROJECT_ROOT / "almready" / "tests" / "out" / "nii_monthly_base_parallel.png"),
+        default=str(_REPO_ROOT / "tests" / "out" / "nii_monthly_base_parallel.png"),
         help="Ruta de salida del grafico mensual.",
     )
 
