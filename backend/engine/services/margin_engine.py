@@ -275,7 +275,7 @@ def calibrate_margin_set(
     raw = pd.DataFrame(rows)
     grouped = (
         raw.groupby(["rate_type", *_DIMENSIONS], dropna=False, as_index=False)
-        .apply(lambda g: pd.Series({"margin_rate": _weighted_average(g["margin_rate"], g["weight"]), "weight": float(g["weight"].sum())}))
+        .apply(lambda g: pd.Series({"margin_rate": _weighted_average(g["margin_rate"], g["weight"]), "weight": float(g["weight"].sum())}), include_groups=False)
         .reset_index(drop=True)
     )
     return CalibratedMarginSet(grouped)

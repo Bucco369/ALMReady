@@ -159,13 +159,13 @@ def curve_from_long_df(
         raise ValueError(f"Curve '{index_name}' has null FwdRate.")
 
     points: list[CurvePoint] = []
-    for _, r in sub.iterrows():
+    for r in sub.itertuples(index=False):
         points.append(
             CurvePoint(
-                year_frac=float(r[col_year_frac]),
-                rate=float(r[col_rate]),
-                tenor=str(r[col_tenor]).strip().upper(),
-                tenor_date=r[col_tenor_date],
+                year_frac=float(getattr(r, col_year_frac)),
+                rate=float(getattr(r, col_rate)),
+                tenor=str(getattr(r, col_tenor)).strip().upper(),
+                tenor_date=getattr(r, col_tenor_date),
             )
         )
 

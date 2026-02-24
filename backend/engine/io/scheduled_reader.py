@@ -158,7 +158,7 @@ def read_scheduled_tabular(
 
     flow_records: list[dict[str, Any]] = []
     active_contract_id: str | None = None
-    for idx, row in raw_df.iterrows():
+    for idx, row in raw_df.iterrows():  # iterrows: dynamic col names + idx needed
         row_kind = _norm_token(row.get(row_kind_col))
         row_kind_norm = row_kind.lower() if row_kind is not None else ""
 
