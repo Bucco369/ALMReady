@@ -128,26 +128,26 @@ def _normalise_daycount_column(
 def _parse_numeric_column(series: pd.Series, *, allow_percent: bool) -> pd.Series:
     """Vectorised numeric parser handling comma/dot ambiguity and percent signs.
 
-    Uses numpy.char operations (3-10x faster than pandas .str accessors)
+    Uses numpy.strings operations (3-10x faster than pandas .str accessors)
     for bulk string scanning, reducing ~14 pandas .str passes to ~6 numpy passes.
     """
     arr = series.values.astype(str)  # single copy to numpy string array
 
-    # numpy.char: strip + detect + clean in far fewer passes than pandas .str
-    arr = np.char.strip(arr)
-    has_pct = np.char.find(arr, "%") >= 0
-    arr = np.char.replace(arr, "%", "")
-    arr = np.char.replace(arr, " ", "")
+    # numpy.strings: strip + detect + clean in far fewer passes than pandas .str
+    arr = np.strings.strip(arr)
+    has_pct = np.strings.find(arr, "%") >= 0
+    arr = np.strings.replace(arr, "%", "")
+    arr = np.strings.replace(arr, " ", "")
 
     # Blank / NaN sentinels
     blanks = np.isin(arr, ["nan", "None", "none", "<NA>", "NaN", "NaT", ""])
 
     # Comma/dot format detection — two numpy passes
-    n_comma = np.char.count(arr, ",")
-    n_dot = np.char.count(arr, ".")
+    n_comma = np.strings.count(arr, ",")
+    n_dot = np.strings.count(arr, ".")
     has_both = (n_comma > 0) & (n_dot > 0)
-    last_comma = np.char.rfind(arr, ",")
-    last_dot = np.char.rfind(arr, ".")
+    last_comma = np.strings.rfind(arr, ",")
+    last_dot = np.strings.rfind(arr, ".")
 
     euro = has_both & (last_comma > last_dot)
     us = has_both & ~euro
