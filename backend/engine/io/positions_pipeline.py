@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import multiprocessing as mp
 import threading
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,14 @@ from engine.io._utils import (
     to_sequence as _to_sequence,
 )
 from engine.io.positions_reader import read_positions_tabular
+
+
+def _init_worker() -> None:
+    """Ensure spawned child processes can import project modules."""
+    import sys
+    backend_dir = str(Path(__file__).resolve().parent.parent.parent)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
 
 
 def _make_chunk_callback(
@@ -57,6 +66,20 @@ class _ThreadSafeProgress:
             self._inflight.pop(task_id, None)
             self._completed_bytes += file_bytes
             self._on_progress(self._completed_bytes, self._total)
+
+
+def _read_one_task_mp(
+    task_id: int,
+    raw_spec: dict[str, Any],
+    source_file: Path,
+    effective_sheets: list,
+    module_name: str,
+    row_cb: Callable[[int], None] | None,
+) -> list[pd.DataFrame]:
+    """ProcessPoolExecutor wrapper: imports mapping module by name then delegates."""
+    import importlib
+    mapping_module = importlib.import_module(module_name)
+    return _read_one_task(task_id, raw_spec, source_file, effective_sheets, mapping_module, row_cb)
 
 
 def _read_one_task(
@@ -174,30 +197,30 @@ def load_positions_from_specs(
             total_bytes += source_file.stat().st_size
 
     # ── Parallel path ────────────────────────────────────────────────────
+    # ProcessPoolExecutor bypasses the GIL, giving true parallelism for
+    # CPU-bound type conversion and string processing.  Per-chunk progress
+    # callbacks can't cross process boundaries, so progress updates at
+    # file-completion granularity (still smooth for 10+ files).
     if parallel > 0 and len(file_tasks) > 1:
         workers = min(parallel, len(file_tasks))
-        progress_tracker = (
-            _ThreadSafeProgress(total_bytes, on_progress)
-            if on_progress and total_bytes > 0
-            else None
-        )
-        bytes_per_row = 250.0
-
         ordered_frames: list[tuple[int, list[pd.DataFrame]]] = []
+        completed_bytes = 0
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        module_name = mapping_module.__name__
+        ctx = mp.get_context("spawn")  # safe on macOS (avoids fork-safety issues)
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=ctx,
+            initializer=_init_worker,
+        ) as pool:
             futures = {}
             for task_id, (raw_spec, source_file, effective_sheets) in enumerate(file_tasks):
                 file_bytes = source_file.stat().st_size
-                row_cb = None
-                if progress_tracker is not None:
-                    est_rows = max(file_bytes / bytes_per_row, 1)
-                    row_cb = progress_tracker.make_callback(task_id, file_bytes, est_rows)
-
+                # Pass module name (string) instead of module object (not picklable)
                 fut = pool.submit(
-                    _read_one_task,
-                    task_id, raw_spec, source_file, effective_sheets,
-                    mapping_module, row_cb,
+                    _read_one_task_mp,
+                    task_id, dict(raw_spec), source_file, effective_sheets,
+                    module_name, None,  # no per-chunk callback across processes
                 )
                 futures[fut] = (task_id, file_bytes)
 
@@ -205,8 +228,9 @@ def load_positions_from_specs(
                 task_id, file_bytes = futures[fut]
                 result_frames = fut.result()  # propagates exceptions
                 ordered_frames.append((task_id, result_frames))
-                if progress_tracker is not None:
-                    progress_tracker.mark_complete(task_id, file_bytes)
+                completed_bytes += file_bytes
+                if on_progress and total_bytes > 0:
+                    on_progress(completed_bytes, total_bytes)
 
         # Preserve original spec order for deterministic concat
         ordered_frames.sort(key=lambda x: x[0])
