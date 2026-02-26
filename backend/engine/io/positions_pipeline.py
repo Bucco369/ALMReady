@@ -82,6 +82,31 @@ def _read_one_task_mp(
     return _read_one_task(task_id, raw_spec, source_file, effective_sheets, mapping_module, row_cb)
 
 
+def _read_one_task_to_parquet(
+    task_id: int,
+    raw_spec: dict[str, Any],
+    source_file: Path,
+    effective_sheets: list,
+    module_name: str,
+    output_dir: str,
+) -> list[str]:
+    """Worker that writes results to Parquet files instead of returning DataFrames.
+
+    Avoids pickle serialization of large DataFrames across process boundaries.
+    Returns a list of lightweight file paths (strings) instead.
+    """
+    import importlib
+    mapping_module = importlib.import_module(module_name)
+    frames = _read_one_task(task_id, raw_spec, source_file, effective_sheets, mapping_module, None)
+
+    paths: list[str] = []
+    for i, df in enumerate(frames):
+        out = Path(output_dir) / f"task_{task_id}_{i}.parquet"
+        df.to_parquet(out, engine="pyarrow", index=False)
+        paths.append(str(out))
+    return paths
+
+
 def _read_one_task(
     task_id: int,
     raw_spec: Mapping[str, Any],
@@ -199,43 +224,53 @@ def load_positions_from_specs(
 
     # ── Parallel path ────────────────────────────────────────────────────
     # ProcessPoolExecutor bypasses the GIL, giving true parallelism for
-    # CPU-bound type conversion and string processing.  Per-chunk progress
-    # callbacks can't cross process boundaries, so progress updates at
-    # file-completion granularity (still smooth for 10+ files).
+    # CPU-bound type conversion and string processing.  Workers write results
+    # as Parquet temp files instead of returning DataFrames via pickle,
+    # avoiding ~15s of serialization overhead on 1.5M+ row datasets.
     if parallel > 0 and len(file_tasks) > 1:
-        workers = min(parallel, len(file_tasks))
-        ordered_frames: list[tuple[int, list[pd.DataFrame]]] = []
-        completed_bytes = 0
+        import tempfile, shutil
 
+        workers = min(parallel, len(file_tasks))
         module_name = mapping_module.__name__
         ctx = mp.get_context("spawn")  # safe on macOS (avoids fork-safety issues)
-        with ProcessPoolExecutor(
-            max_workers=workers,
-            mp_context=ctx,
-            initializer=_init_worker,
-        ) as pool:
-            futures = {}
-            for task_id, (raw_spec, source_file, effective_sheets) in enumerate(file_tasks):
-                file_bytes = source_file.stat().st_size
-                # Pass module name (string) instead of module object (not picklable)
-                fut = pool.submit(
-                    _read_one_task_mp,
-                    task_id, dict(raw_spec), source_file, effective_sheets,
-                    module_name, None,  # no per-chunk callback across processes
-                )
-                futures[fut] = (task_id, file_bytes)
+        tmpdir = tempfile.mkdtemp(prefix="alm_parallel_")
 
-            for fut in as_completed(futures):
-                task_id, file_bytes = futures[fut]
-                result_frames = fut.result()  # propagates exceptions
-                ordered_frames.append((task_id, result_frames))
-                completed_bytes += file_bytes
-                if on_progress and total_bytes > 0:
-                    on_progress(completed_bytes, total_bytes)
+        try:
+            ordered_paths: list[tuple[int, list[str]]] = []
+            completed_bytes = 0
 
-        # Preserve original spec order for deterministic concat
-        ordered_frames.sort(key=lambda x: x[0])
-        frames = [df for _, frame_list in ordered_frames for df in frame_list]
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                mp_context=ctx,
+                initializer=_init_worker,
+            ) as pool:
+                futures = {}
+                for task_id, (raw_spec, source_file, effective_sheets) in enumerate(file_tasks):
+                    file_bytes = source_file.stat().st_size
+                    fut = pool.submit(
+                        _read_one_task_to_parquet,
+                        task_id, dict(raw_spec), source_file, effective_sheets,
+                        module_name, tmpdir,
+                    )
+                    futures[fut] = (task_id, file_bytes)
+
+                for fut in as_completed(futures):
+                    task_id, file_bytes = futures[fut]
+                    parquet_paths = fut.result()  # lightweight list of strings
+                    ordered_paths.append((task_id, parquet_paths))
+                    completed_bytes += file_bytes
+                    if on_progress and total_bytes > 0:
+                        on_progress(completed_bytes, total_bytes)
+
+            # Read temp Parquet files in original spec order for deterministic concat
+            ordered_paths.sort(key=lambda x: x[0])
+            frames = [
+                pd.read_parquet(p)
+                for _, paths in ordered_paths
+                for p in paths
+            ]
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
         if not frames:
             raise ValueError("No positions loaded from SOURCE_SPECS.")

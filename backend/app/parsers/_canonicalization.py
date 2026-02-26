@@ -199,7 +199,12 @@ def _classify_motor_df(
     motor_df: pd.DataFrame,
     client_rules: dict[str, Any],
 ) -> pd.DataFrame:
-    """Vectorised balance classification: iterates over *rules* not *rows*."""
+    """Vectorised balance classification using deduplicated (side, product) pairs.
+
+    Instead of running ~70 rules against ~1.5M rows (= ~100M string scans),
+    deduplicates to ~5K unique (side, product) pairs first, classifies those,
+    then maps back.  This is ~300x fewer string comparisons.
+    """
     n = len(motor_df)
 
     # Resolve side from apartado, fallback to motor side
@@ -213,13 +218,20 @@ def _classify_motor_df(
     # Prepare producto for keyword matching
     producto = motor_df["balance_product"].fillna("").astype(str).str.upper() if "balance_product" in motor_df.columns else pd.Series("", index=motor_df.index)
 
-    # Default subcategory_id per side
-    subcategory_id = pd.Series(ASSET_DEFAULT, index=motor_df.index, dtype="object")
-    subcategory_id = subcategory_id.where(side == "asset", LIABILITY_DEFAULT)
-    subcategory_id = subcategory_id.where(side != "derivative", "derivatives")
+    # ── Deduplicated classification ──────────────────────────────────────
+    # Build a small DataFrame of unique (side, producto) combinations (~5K rows
+    # vs ~1.5M), run rules against those, then map results back to all rows.
+    combo = pd.DataFrame({"side": side.values, "producto": producto.values})
+    unique_combos = combo.drop_duplicates()
 
-    # Match rules: iterate over rules (~70), not rows (~1.5M)
-    matched = pd.Series(False, index=motor_df.index)
+    # Classify unique combos with first-match-wins semantics
+    u_side = unique_combos["side"]
+    u_prod = unique_combos["producto"]
+
+    # Default subcategory per side
+    defaults = {"asset": ASSET_DEFAULT, "liability": LIABILITY_DEFAULT, "derivative": "derivatives"}
+    u_subcat = u_side.map(defaults).fillna(ASSET_DEFAULT)
+    u_matched = pd.Series(False, index=unique_combos.index)
 
     all_rule_sets: list[tuple[str, Sequence[tuple[str, str]]]] = [
         ("asset", client_rules.get("asset_rules", ())),
@@ -228,14 +240,25 @@ def _classify_motor_df(
     ]
 
     for target_side, rules in all_rule_sets:
+        side_mask = u_side == target_side
         for keyword, sub_id in rules:
-            rule_match = (side == target_side) & ~matched & producto.str.contains(keyword.upper(), na=False, regex=False)
-            subcategory_id = subcategory_id.where(~rule_match, sub_id)
-            matched = matched | rule_match
+            rule_match = side_mask & ~u_matched & u_prod.str.contains(keyword.upper(), na=False, regex=False)
+            u_subcat = u_subcat.where(~rule_match, sub_id)
+            u_matched = u_matched | rule_match
+
+    # Build lookup: (side, producto) → subcategory_id
+    unique_combos = unique_combos.copy()
+    unique_combos["_subcat"] = u_subcat.values
+    # Create a composite key for fast mapping
+    combo_key = side + "|" + producto
+    unique_key = unique_combos["side"] + "|" + unique_combos["producto"]
+    subcat_map = dict(zip(unique_key, unique_combos["_subcat"]))
+    subcategory_id = combo_key.map(subcat_map)
 
     # Log classification coverage
-    n_unmatched = int((~matched).sum())
-    if n_unmatched > 0:
+    n_unmatched_unique = int((~u_matched).sum())
+    if n_unmatched_unique > 0:
+        n_unmatched = int(subcategory_id.isin({ASSET_DEFAULT, LIABILITY_DEFAULT}).sum())
         _log.warning(
             "Classification: %d/%d positions fell through to defaults (%.1f%%)",
             n_unmatched, n, n_unmatched / n * 100 if n > 0 else 0,
@@ -263,53 +286,65 @@ def _canonicalize_motor_df(
     Returns a canonical DataFrame (not list-of-dicts) so downstream consumers
     (tree builder, persistence, sheet summaries) can use vectorized pandas ops
     instead of Python-level row iteration.
+
+    Performance: exploits the fact that motor_df columns are already typed
+    (dates as datetime64, numerics as float64) from the engine reader, avoiding
+    redundant pd.to_datetime / pd.to_numeric calls.
     """
     n = len(motor_df)
 
-    # Classification
+    # Classification (uses deduplicated product matching)
     cls = _classify_motor_df(motor_df, client_rules)
 
-    # Build canonical DataFrame with vectorised ops
-    sct = motor_df["source_contract_type"].fillna("unknown").astype(str) if "source_contract_type" in motor_df.columns else pd.Series("unknown", index=motor_df.index)
+    # ── Source contract type & non-maturity mask ────────────────────────
+    sct = motor_df.get("source_contract_type")
+    if sct is None:
+        sct = pd.Series("unknown", index=motor_df.index)
+    else:
+        sct = sct.fillna("unknown")
     is_non_maturity = sct.str.contains("non_maturity", na=False, regex=False)
 
-    # Contract ID
-    idx_series = pd.Series(range(1, n + 1), index=motor_df.index, dtype="int64")
-    contract_id = motor_df["contract_id"].fillna("motor-" + idx_series.astype(str)).astype(str) if "contract_id" in motor_df.columns else ("motor-" + idx_series.astype(str))
+    # ── Contract ID (already string[python] from engine reader) ─────────
+    if "contract_id" in motor_df.columns:
+        cid = motor_df["contract_id"]
+        needs_fill = cid.isna()
+        if needs_fill.any():
+            fill_ids = "motor-" + pd.RangeIndex(1, n + 1).astype(str)
+            cid = cid.where(~needs_fill, pd.Series(fill_ids, index=motor_df.index))
+    else:
+        cid = "motor-" + pd.RangeIndex(1, n + 1).astype(str)
 
-    # Amounts
-    notional = pd.to_numeric(motor_df["notional"], errors="coerce").fillna(0.0) if "notional" in motor_df.columns else pd.Series(0.0, index=motor_df.index)
+    # ── Amounts (already float64 from engine reader) ───────────────────
+    notional = motor_df["notional"].fillna(0.0) if "notional" in motor_df.columns else pd.Series(0.0, index=motor_df.index)
 
-    # Rate type
-    rate_type_raw = motor_df["rate_type"].fillna("").astype(str) if "rate_type" in motor_df.columns else pd.Series("", index=motor_df.index)
+    # ── Rate type ──────────────────────────────────────────────────────
+    rate_type_raw = motor_df.get("rate_type", pd.Series("", index=motor_df.index))
+    rate_type_raw = rate_type_raw.fillna("")
     rate_type = rate_type_raw.map({"fixed": "Fixed", "float": "Floating"})
 
-    # Dates: parse once, reuse for ISO conversion and maturity calculation
+    # ── Dates (already datetime64 from engine reader — NO re-parse) ────
     now = datetime.now(timezone.utc).date()
 
-    _date_cache: dict[str, pd.Series] = {}
-    for _dcol in ("start_date", "maturity_date", "next_reprice_date"):
-        if _dcol in motor_df.columns:
-            _date_cache[_dcol] = pd.to_datetime(motor_df[_dcol], errors="coerce")
-        else:
-            _date_cache[_dcol] = pd.Series(pd.NaT, index=motor_df.index)
+    def _get_dt(col: str) -> pd.Series:
+        if col in motor_df.columns:
+            s = motor_df[col]
+            # If already datetime, use directly; otherwise parse (legacy path)
+            if pd.api.types.is_datetime64_any_dtype(s):
+                return s
+            return pd.to_datetime(s, errors="coerce")
+        return pd.Series(pd.NaT, index=motor_df.index)
 
-    def _col_to_iso(col_name: str) -> pd.Series:
-        dt = _date_cache[col_name]
-        return dt.dt.strftime("%Y-%m-%d").where(dt.notna(), other=None)
+    dt_start = _get_dt("start_date")
+    dt_maturity = _get_dt("maturity_date")
+    dt_reprice = _get_dt("next_reprice_date")
 
-    fecha_inicio = _col_to_iso("start_date")
-    fecha_vencimiento = _col_to_iso("maturity_date")
-    fecha_prox_reprecio = _col_to_iso("next_reprice_date")
-
-    # Maturity years (vectorised) — reuses cached date parse
-    mat_dt = _date_cache["maturity_date"]
-    mat_years = (mat_dt - pd.Timestamp(now)).dt.days / 365.25
+    # ── Maturity years (vectorised) ────────────────────────────────────
+    mat_years = (dt_maturity - pd.Timestamp(now)).dt.days / 365.25
     mat_years = mat_years.where(mat_years >= 0, other=np.nan)
-    mat_years = mat_years.where(mat_dt.notna(), other=np.nan)
+    mat_years = mat_years.where(dt_maturity.notna(), other=np.nan)
     mat_years = mat_years.where(~is_non_maturity, 0.0)
 
-    # Maturity bucket (vectorised)
+    # ── Maturity bucket (vectorised) ──────────────────────────────────
     maturity_bucket = pd.cut(
         mat_years,
         bins=[-np.inf, 1, 5, 10, 20, np.inf],
@@ -319,29 +354,36 @@ def _canonicalize_motor_df(
     maturity_bucket = maturity_bucket.where(mat_years.notna(), other=None)
     maturity_bucket = maturity_bucket.where(~is_non_maturity, "<1Y")
 
-    # Float columns
+    # ── Float columns (already float64 — skip pd.to_numeric) ──────────
     def _float_col(name: str) -> pd.Series:
         if name not in motor_df.columns:
-            return pd.Series(None, index=motor_df.index, dtype="object")
-        parsed = pd.to_numeric(motor_df[name], errors="coerce")
-        return parsed.where(parsed.notna(), other=None)
+            return pd.Series(np.nan, index=motor_df.index)
+        s = motor_df[name]
+        if pd.api.types.is_float_dtype(s):
+            return s
+        return pd.to_numeric(s, errors="coerce")
 
-    fixed_rate = _float_col("fixed_rate")
-    spread_val = _float_col("spread")
-    floor_rate = _float_col("floor_rate")
-    cap_rate = _float_col("cap_rate")
-
-    # Text columns
+    # ── Text columns (single null-mask, no redundant astype) ──────────
     def _text_col(name: str) -> pd.Series:
         if name not in motor_df.columns:
             return pd.Series(None, index=motor_df.index, dtype="object")
-        s = motor_df[name].astype(str).str.strip()
-        return s.where((motor_df[name].notna()) & s.ne("") & s.ne("nan") & s.ne("None") & s.ne("<NA>"), other=None)
+        s = motor_df[name]
+        null_mask = s.isna()
+        # For object columns that are already strings, avoid .astype(str)
+        if s.dtype == "object":
+            str_s = s.str.strip()
+        else:
+            str_s = s.astype(str).str.strip()
+        blank = null_mask | str_s.isin({"", "nan", "None", "<NA>"})
+        return str_s.where(~blank, other=None)
 
     categoria_ui = cls["cls_side"].map(_BC_SIDE_UI).fillna("Assets")
 
+    # ── Build canonical DataFrame ─────────────────────────────────────
+    # Keep dates as datetime64 — Parquet serializes natively.
+    # Only convert to ISO strings at JSON read time (_read_positions_file).
     canonical_df = pd.DataFrame({
-        "contract_id": contract_id,
+        "contract_id": cid,
         "sheet": sct,
         "side": cls["cls_side"],
         "categoria_ui": categoria_ui,
@@ -353,16 +395,16 @@ def _canonicalize_motor_df(
         "amount": notional,
         "book_value": None,
         "rate_type": rate_type,
-        "rate_display": fixed_rate,
+        "rate_display": _float_col("fixed_rate"),
         "tipo_tasa_raw": rate_type_raw,
-        "tasa_fija": fixed_rate,
-        "spread": spread_val,
+        "tasa_fija": _float_col("fixed_rate"),
+        "spread": _float_col("spread"),
         "indice_ref": _text_col("index_name"),
         "tenor_indice": None,
-        "fecha_inicio": fecha_inicio,
-        "fecha_vencimiento": fecha_vencimiento,
-        "fecha_prox_reprecio": fecha_prox_reprecio,
-        "maturity_years": mat_years.where(mat_years.notna(), other=None),
+        "fecha_inicio": dt_start,
+        "fecha_vencimiento": dt_maturity,
+        "fecha_prox_reprecio": dt_reprice,
+        "maturity_years": mat_years,
         "maturity_bucket": maturity_bucket,
         "repricing_bucket": None,
         "include_in_balance_tree": cls["cls_side"].isin({"asset", "liability"}),
@@ -371,15 +413,13 @@ def _canonicalize_motor_df(
         "notional": notional,
         "repricing_freq": _text_col("repricing_freq"),
         "payment_freq": _text_col("payment_freq"),
-        "floor_rate": floor_rate,
-        "cap_rate": cap_rate,
+        "floor_rate": _float_col("floor_rate"),
+        "cap_rate": _float_col("cap_rate"),
         "balance_product": _text_col("balance_product"),
         "balance_section": _text_col("balance_section"),
         "balance_epigrafe": _text_col("balance_epigrafe"),
     }, index=motor_df.index)
 
-    # NaN/NaT → null is handled natively by Parquet on write;
-    # _read_positions_file() applies .where(notna(), None) on read for JSON.
     return canonical_df
 
 

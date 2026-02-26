@@ -196,9 +196,15 @@ def _parse_zip_balance(
     n_records = len(motor_df)
     _log.info("Parsed %d motor positions from ZIP (%d workers)", n_records, n_workers)
 
-    # 3. Persist motor DataFrame as Parquet
+    # 3. Persist motor DataFrame as Parquet (in background thread)
+    #    Overlaps with canonicalization since both only READ motor_df.
     progress.update("persisting")
-    _serialize_motor_df_to_parquet(motor_df, _motor_positions_path(session_id))
+    import threading
+    motor_write_thread = threading.Thread(
+        target=_serialize_motor_df_to_parquet,
+        args=(motor_df, _motor_positions_path(session_id)),
+    )
+    motor_write_thread.start()
 
     # 4. Build UI-canonical DataFrame (vectorised — iterates ~70 rules, not rows)
     #    Returns pd.DataFrame — NO dict round-trip.
@@ -206,7 +212,8 @@ def _parse_zip_balance(
     client_rules = _bc_get_rules(adapter.client_id)
     canonical_df = _canonicalize_motor_df(motor_df, client_rules)
 
-    # Free motor_df memory — it's persisted to Parquet and no longer needed
+    # Wait for motor Parquet write to finish before freeing motor_df
+    motor_write_thread.join()
     del motor_df
 
     # 5. Build sheet summaries (vectorised groupby on DataFrame)
@@ -227,8 +234,13 @@ def _parse_zip_balance(
             )
         )
         # Only materialize 3 sample rows per sheet (not 1.5M dicts)
+        # Sanitize values for JSON: canonical DataFrame uses native numpy/datetime
+        # types for Parquet efficiency, but sample_rows must be JSON-serializable.
         sample_slice = canonical_df.iloc[grp_idx[:3]]
-        sample_rows[str(ct)] = sample_slice.to_dict(orient="records")
+        sample_rows[str(ct)] = [
+            {str(k): _serialize_value_for_json(v) for k, v in rec.items()}
+            for rec in sample_slice.to_dict(orient="records")
+        ]
 
     sheet_summaries.sort(key=lambda s: s.sheet)
 
