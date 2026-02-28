@@ -86,10 +86,18 @@ export function WhatIfAddTab() {
     const subcategoryMap: Record<string, string> = {
       'fixed-loan': 'loans',
       'floating-loan': 'loans',
+      'mixed-loan': 'loans',
       'bond-portfolio': 'securities',
+      'bond-frn': 'securities',
       'nmd': 'deposits',
       'term-deposit': 'term-deposits',
-      'wholesale': 'wholesale-funding',
+      'wholesale-fixed': 'wholesale-funding',
+      'wholesale-floating': 'wholesale-funding',
+      'covered-bond': 'wholesale-funding',
+      'covered-bond-floating': 'wholesale-funding',
+      'subordinated': 'wholesale-funding',
+      'subordinated-floating': 'wholesale-funding',
+      'subordinated-fix2float': 'wholesale-funding',
       'irs-hedge': 'loans', // derivatives appear under appropriate category
       'securitised': 'mortgages',
     };

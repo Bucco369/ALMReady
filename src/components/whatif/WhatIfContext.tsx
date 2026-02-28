@@ -27,6 +27,7 @@ import type { WhatIfModification } from '@/types/whatif';
 interface WhatIfContextType {
   modifications: WhatIfModification[];
   addModification: (mod: Omit<WhatIfModification, 'id'>) => void;
+  updateModification: (id: string, mod: Omit<WhatIfModification, 'id'>) => void;
   removeModification: (id: string) => void;
   clearModifications: () => void;
   isApplied: boolean;
@@ -35,6 +36,8 @@ interface WhatIfContextType {
   applyCounter: number;
   addCount: number;
   removeCount: number;
+  behaviouralCount: number;
+  pricingCount: number;
   // New: Analysis Date & CET1 Capital
   analysisDate: Date | null;
   setAnalysisDate: (date: Date | null) => void;
@@ -56,6 +59,11 @@ export function WhatIfProvider({ children }: { children: ReactNode }) {
   const addModification = useCallback((mod: Omit<WhatIfModification, 'id'>) => {
     const id = `${mod.type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     setModifications(prev => [...prev, { ...mod, id }]);
+    setIsApplied(false);
+  }, []);
+
+  const updateModification = useCallback((id: string, mod: Omit<WhatIfModification, 'id'>) => {
+    setModifications(prev => prev.map(m => m.id === id ? { ...mod, id } : m));
     setIsApplied(false);
   }, []);
 
@@ -84,11 +92,14 @@ export function WhatIfProvider({ children }: { children: ReactNode }) {
 
   const addCount = modifications.filter(m => m.type === 'add').length;
   const removeCount = modifications.filter(m => m.type === 'remove').length;
+  const behaviouralCount = modifications.filter(m => m.type === 'behavioural').length;
+  const pricingCount = modifications.filter(m => m.type === 'pricing').length;
 
   return (
     <WhatIfContext.Provider value={{
       modifications,
       addModification,
+      updateModification,
       removeModification,
       clearModifications,
       isApplied,
@@ -96,6 +107,8 @@ export function WhatIfProvider({ children }: { children: ReactNode }) {
       applyCounter,
       addCount,
       removeCount,
+      behaviouralCount,
+      pricingCount,
       analysisDate,
       setAnalysisDate,
       cet1Capital,

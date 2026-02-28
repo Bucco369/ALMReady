@@ -206,6 +206,7 @@ const Index = () => {
               sessionId={sessionId}
               hasBalance={sessionMeta?.has_balance ?? false}
               onDataReset={handleDataReset}
+              scenarios={scenarios}
             />
 
             {/* Top-right: Curves & Scenarios (merged) */}

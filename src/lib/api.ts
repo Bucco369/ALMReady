@@ -528,6 +528,62 @@ export async function calculateWhatIf(
   );
 }
 
+// ── Find Limit ──────────────────────────────────────────────────────────────
+
+export type FindLimitRequestBody = {
+  product_spec: {
+    id: string;
+    notional: number;
+    term_years: number;
+    side?: string;
+    currency?: string;
+    rate_type?: string;
+    fixed_rate?: number | null;
+    variable_index?: string | null;
+    spread_bps?: number;
+    amortization?: string;
+    grace_years?: number;
+    daycount?: string;
+    payment_freq?: string;
+    repricing_freq?: string | null;
+    start_date?: string | null;
+    floor_rate?: number | null;
+    cap_rate?: number | null;
+    label?: string;
+  };
+  target_metric: string;
+  target_scenario: string;
+  limit_value: number;
+  solve_for: string;
+};
+
+export type FindLimitResponseBody = {
+  session_id: string;
+  found_value: number;
+  achieved_metric: number;
+  target_metric: string;
+  target_scenario: string;
+  solve_for: string;
+  converged: boolean;
+  iterations: number;
+  tolerance: number;
+  product_spec: FindLimitRequestBody["product_spec"];
+};
+
+export async function findLimit(
+  sessionId: string,
+  request: FindLimitRequestBody,
+): Promise<FindLimitResponseBody> {
+  return http<FindLimitResponseBody>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/whatif/find-limit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
 // ── Chart data (per-bucket EVE + per-month NII) ────────────────────────────
 
 export type ChartBucketRow = {

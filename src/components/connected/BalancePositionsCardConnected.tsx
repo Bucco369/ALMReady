@@ -33,7 +33,7 @@ import { useSmoothProgress } from "@/hooks/useSmoothProgress";
 import { toast } from "sonner";
 import { inferCategoryFromSheetName } from "@/lib/balanceUi";
 import { generateSamplePositionsCSV, parsePositionsCSV } from "@/lib/csvParser";
-import type { Position } from "@/types/financial";
+import type { Position, Scenario } from "@/types/financial";
 
 interface BalancePositionsCardConnectedProps {
   positions: Position[];
@@ -41,6 +41,7 @@ interface BalancePositionsCardConnectedProps {
   sessionId: string | null;
   hasBalance: boolean;
   onDataReset?: () => void;
+  scenarios?: Scenario[];
 }
 
 const DEFAULT_MATURITY_DATE = "2030-12-31";
@@ -88,6 +89,7 @@ export function BalancePositionsCardConnected({
   sessionId,
   hasBalance,
   onDataReset,
+  scenarios,
 }: BalancePositionsCardConnectedProps) {
   const [balanceSummary, setBalanceSummary] = useState<BalanceSummaryResponse | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -282,6 +284,7 @@ export function BalancePositionsCardConnected({
         isUploading={isUploading}
         uploadProgress={smoothProgress}
         uploadPhase={uploadPhase}
+        scenarios={scenarios}
       />
     </div>
   );

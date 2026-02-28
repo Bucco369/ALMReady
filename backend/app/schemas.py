@@ -247,6 +247,106 @@ class WhatIfResultsResponse(BaseModel):
     calculated_at: str
 
 
+# ── What-If V2 (Generalized Decomposer) ───────────────────────────────────
+
+class LoanSpecItem(BaseModel):
+    """Rich loan specification — maps 1:1 to the backend LoanSpec dataclass.
+
+    The frontend sends this for each 'add' modification.  The decomposer
+    converts it into N motor-compatible positions (1–5 depending on
+    rate_type, amortization, and grace period).
+    """
+    id: str
+    notional: float
+    term_years: float
+    side: str = "A"                    # A = asset, L = liability
+    currency: str = "EUR"
+    rate_type: str = "fixed"           # fixed | variable | mixed
+    fixed_rate: float | None = None    # decimal (e.g. 0.024 = 2.4%)
+    variable_index: str | None = None  # e.g. "EUR_EURIBOR_12M"
+    spread_bps: float = 0.0
+    mixed_fixed_years: float | None = None
+    amortization: str = "bullet"       # bullet | linear | annuity
+    grace_years: float = 0.0
+    daycount: str = "30/360"
+    payment_freq: str = "12M"          # e.g. "1M", "3M", "6M", "12M"
+    repricing_freq: str | None = None
+    start_date: str | None = None      # ISO date; defaults to analysis_date
+    floor_rate: float | None = None
+    cap_rate: float | None = None
+    label: str = ""
+
+
+class DecomposedPosition(BaseModel):
+    """Single motor-compatible position produced by the decomposer."""
+    contract_id: str
+    side: str
+    source_contract_type: str
+    notional: float
+    fixed_rate: float
+    spread: float
+    start_date: str
+    maturity_date: str
+    index_name: str | None = None
+    next_reprice_date: str | None = None
+    daycount_base: str
+    payment_freq: str
+    repricing_freq: str | None = None
+    currency: str
+    floor_rate: float | None = None
+    cap_rate: float | None = None
+    rate_type: str
+
+
+class DecomposeResponse(BaseModel):
+    """Preview of decomposed positions before running the full calculation."""
+    session_id: str
+    positions: list[DecomposedPosition]
+    position_count: int
+
+
+class WhatIfV2CalculateRequest(BaseModel):
+    """Request for the generalized What-If calculation.
+
+    ``additions`` use the rich LoanSpec format (decomposed into N positions).
+    ``removals`` reuse the existing WhatIfModificationItem format.
+    """
+    additions: list[LoanSpecItem] = Field(default_factory=list)
+    removals: list[WhatIfModificationItem] = Field(default_factory=list)
+
+
+# ── Find Limit ─────────────────────────────────────────────────────────────
+
+
+class FindLimitRequest(BaseModel):
+    """Request to find the value of a single variable that reaches a metric limit.
+
+    The frontend sends a full product specification (same LoanSpecItem as what-if)
+    plus a constraint definition (target metric, scenario, limit) and which
+    variable to solve for.  The backend uses binary search (or linear scaling
+    for notional) to find the answer.
+    """
+    product_spec: LoanSpecItem
+    target_metric: str              # "eve" | "nii"
+    target_scenario: str            # "base" | "worst" | specific scenario name
+    limit_value: float              # absolute target value
+    solve_for: str                  # "notional" | "rate" | "maturity" | "spread"
+
+
+class FindLimitResponse(BaseModel):
+    """Result of the find-limit solver."""
+    session_id: str
+    found_value: float              # the solved variable value
+    achieved_metric: float          # actual metric at the found value
+    target_metric: str
+    target_scenario: str
+    solve_for: str
+    converged: bool
+    iterations: int
+    tolerance: float                # absolute tolerance achieved
+    product_spec: LoanSpecItem      # echo back with the solved variable filled in
+
+
 # ── Chart Data ──────────────────────────────────────────────────────────────
 
 class ChartBucketRow(BaseModel):

@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import type { Position } from '@/types/financial';
+import type { Position, Scenario } from '@/types/financial';
 import type { BalanceSummaryTree } from '@/lib/api';
 import { parsePositionsCSV, generateSamplePositionsCSV } from '@/lib/csvParser';
-import { WhatIfBuilder } from '@/components/whatif/WhatIfBuilder';
+import { WhatIfWorkbench } from '@/components/whatif/WhatIfWorkbench';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
 import { BalanceDetailsModal } from '@/components/BalanceDetailsModal';
 import { BehaviouralAssumptionsModal } from '@/components/behavioural/BehaviouralAssumptionsModal';
@@ -17,6 +17,7 @@ import { format } from 'date-fns';
 import { mapSummaryTreeToUiTree, type BalanceUiTree } from '@/lib/balanceUi';
 import type { WhatIfModification } from '@/types/whatif';
 
+
 interface BalancePositionsCardProps {
   positions: Position[];
   onPositionsChange: (positions: Position[]) => void;
@@ -25,6 +26,7 @@ interface BalancePositionsCardProps {
   isUploading?: boolean;
   uploadProgress?: number;
   uploadPhase?: string;
+  scenarios?: Scenario[];
 }
 
 type WhatIfDelta = {
@@ -318,6 +320,7 @@ export function BalancePositionsCard({
   isUploading = false,
   uploadProgress = 0,
   uploadPhase = '',
+  scenarios,
 }: BalancePositionsCardProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -615,12 +618,13 @@ export function BalancePositionsCard({
         sessionId={sessionId ?? null}
       />
 
-      {/* What-If Builder Side Panel */}
-      <WhatIfBuilder
+      {/* What-If Workbench Dialog */}
+      <WhatIfWorkbench
         open={showWhatIfBuilder}
         onOpenChange={setShowWhatIfBuilder}
         sessionId={sessionId ?? null}
         balanceTree={balanceTree}
+        scenarios={scenarios}
       />
 
       {/* Behavioural Assumptions Modal */}
