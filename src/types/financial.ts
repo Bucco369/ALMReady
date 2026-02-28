@@ -71,6 +71,8 @@ export interface Scenario {
   description?: string;
   shockBps: number; // basis points
   enabled: boolean;
+  /** Per-tenor shocks in bps for "torsion" scenarios. Key = tenor label (e.g. "1Y"). */
+  customShocks?: Record<string, number>;
 }
 
 export interface Cashflow {
