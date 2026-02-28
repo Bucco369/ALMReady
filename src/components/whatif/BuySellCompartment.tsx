@@ -1,14 +1,57 @@
 /**
  * BuySellCompartment.tsx – Add + Remove positions for the What-If Workbench.
  *
- * ADD side (left):  Product catalog → Family → Variant → Form.
- *   Uses PRODUCT_FAMILIES from whatif.ts — independent of the current balance.
- *   The user can add any product type, even ones not in their portfolio.
- *   Form components are shared with FindLimitCompartment via shared/ProductConfigForm.
+ * ── LAYOUT ────────────────────────────────────────────────────────────
  *
- * REMOVE side (right): Balance tree accordion + contract search.
- *   CRITICAL: Structure mirrors balanceSchema.ts (ASSET_SUBCATEGORIES /
- *   LIABILITY_SUBCATEGORIES) so changes propagate automatically.
+ *   ┌──────────────────────┬──────────────────────┐
+ *   │   Remove Position    │    Add Position       │
+ *   │   (RemoveAccordion)  │    (AddCatalog)       │
+ *   ├──────────────────────┼──────────────────────┤
+ *   │ • Contract search    │ • Cascading dropdowns │
+ *   │   (by contract ID)   │   (Side → Family →    │
+ *   │ • Balance tree       │    Variant)            │
+ *   │   accordion          │ • Structural config   │
+ *   │   (Asset/Liability   │   (Currency, Daycount, │
+ *   │    → subcategories)  │    Grace, Amortization)│
+ *   │ • "Remove All" per   │ • Template fields     │
+ *   │   subcategory        │   (Notional, Rate,     │
+ *   │ • "View Contracts"   │    Dates, etc.)        │
+ *   │   modal for cherry-  │ • [Add to Modifications│
+ *   │   pick removal       │ • [Calculate Impact]   │
+ *   └──────────────────────┴──────────────────────┘
+ *
+ * ── ADD SIDE (AddCatalog) ─────────────────────────────────────────────
+ *
+ *   Product catalog flow:
+ *     PRODUCT_FAMILIES (whatif.ts) → variants → PRODUCT_TEMPLATES
+ *     → shared/ProductConfigForm renders the form
+ *     → buildModificationFromForm() (shared/constants.ts) creates the modification
+ *     → useWhatIf().addModification() stores it in context
+ *
+ *   "Calculate Impact" button:
+ *     Calls calculateWhatIf() to preview EVE/NII deltas for the SINGLE
+ *     position being configured, before adding it to modifications.
+ *     Currently uses the OLD endpoint (V1) — pending migration to V2
+ *     which supports amortization, floor/cap, mixed rates, and grace.
+ *     Results displayed in ImpactResultsPanel (per-scenario table).
+ *
+ *   Edit mode:
+ *     When editingModification is set, the form pre-fills from the
+ *     existing modification and the submit button says "Save Changes".
+ *     resolveModificationSelections() reverse-maps templateId → family/variant.
+ *
+ * ── REMOVE SIDE (RemoveAccordion) ─────────────────────────────────────
+ *
+ *   Two removal modes:
+ *     removeMode='all'       → Remove entire subcategory (e.g. all "deposits")
+ *     removeMode='contracts' → Remove specific contract IDs
+ *
+ *   Balance tree structure mirrors balanceSchema.ts (ASSET_SUBCATEGORIES /
+ *   LIABILITY_SUBCATEGORIES) so adding a new subcategory there automatically
+ *   appears in the remove accordion.
+ *
+ *   "Remove All" fetches all contracts for the subcategory and stores
+ *   maturityProfile[] for accurate chart tenor allocation.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import {

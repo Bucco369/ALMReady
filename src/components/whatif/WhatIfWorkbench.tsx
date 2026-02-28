@@ -1,11 +1,55 @@
 /**
- * WhatIfWorkbench.tsx – Large modal dialog replacing the old WhatIfBuilder sheet.
+ * WhatIfWorkbench.tsx – Main modal dialog for the What-If analysis system.
  *
- * Four compartments at the top: Buy/Sell, Find Limit, Behavioural, Pricing.
- * Each tab shows a workspace below. User can switch freely between them.
- * All compartments stay mounted (CSS hidden) to preserve form state.
+ * ── UI STRUCTURE ──────────────────────────────────────────────────────
  *
- * Buy/Sell, Find Limit, and Behavioural are implemented — Pricing shows a placeholder.
+ *   ┌─────────────────────────────────────────────────────────┐
+ *   │  Header: "What-If Workbench"                    [Close] │
+ *   ├──────────┬───────────┬─────────────┬───────────────────-┤
+ *   │ Add/Remove│ Find Limit│ Behavioural │     Pricing        │ ← Tab bar
+ *   ├──────────┴───────────┴─────────────┴───────────────────-┤
+ *   │  [Pending Modifications summary — badges with counts]   │
+ *   ├─────────────────────────────────────────────────────────┤
+ *   │                                                         │
+ *   │  Active compartment content (all stay mounted,          │
+ *   │  inactive ones hidden with CSS to preserve form state)  │
+ *   │                                                         │
+ *   ├─────────────────────────────────────────────────────────┤
+ *   │  [Clear All]                         [Apply to Analysis] │
+ *   └─────────────────────────────────────────────────────────┘
+ *
+ * ── COMPARTMENTS ──────────────────────────────────────────────────────
+ *
+ *   1. Add/Remove (BuySellCompartment):
+ *      - LEFT: Remove positions from existing balance (tree accordion + contract search)
+ *      - RIGHT: Add synthetic positions (product catalog → form → "Add to Modifications")
+ *      - Includes "Calculate Impact" preview button (calls V1 endpoint currently)
+ *
+ *   2. Find Limit (FindLimitCompartment):
+ *      - LEFT: Constraint definition (metric, scenario, limit value, solve-for variable)
+ *      - RIGHT: Same product form as Add (shared ProductConfigForm components)
+ *      - Calls POST /api/sessions/{id}/whatif/find-limit (V2 decomposer backend)
+ *
+ *   3. Behavioural (BehaviouralCompartment):
+ *      - LEFT: Current assumptions (NMD core%, maturity, pass-through; prepayment SMM; TDRR)
+ *      - RIGHT: Override form → creates type='behavioural' modifications
+ *
+ *   4. Pricing (PricingCompartment):
+ *      - LEFT: Portfolio snapshot (volumes, rates, annual interest, NII, NIM)
+ *      - RIGHT: Repricing simulation → creates type='pricing' modifications
+ *
+ * ── PROPS FLOW ────────────────────────────────────────────────────────
+ *
+ *   Index.tsx → BalancePositionsCardConnected → BalancePositionsCard → WhatIfWorkbench
+ *     • sessionId: Backend session for API calls
+ *     • balanceTree: Current balance for remove-side accordion and pricing snapshot
+ *     • scenarios: Interest rate scenarios for impact preview display
+ *
+ * ── APPLY TO ANALYSIS ─────────────────────────────────────────────────
+ *
+ *   "Apply to Analysis" button sets isApplied=true in WhatIfContext.
+ *   ResultsCard watches applyCounter and sends all modifications to the
+ *   backend for EVE/NII delta calculation. The workbench closes on apply.
  */
 import React, { useState } from 'react';
 import {

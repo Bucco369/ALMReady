@@ -262,6 +262,30 @@ export type CalculateRequest = {
   risk_free_index?: string;
 };
 
+/**
+ * ── WHAT-IF API TYPES & FUNCTIONS ─────────────────────────────────────
+ *
+ * TWO backend endpoints exist for What-If calculations:
+ *
+ * V1 (legacy): POST /api/sessions/{id}/calculate/whatif
+ *   • Function: calculateWhatIf()
+ *   • Payload: { modifications: WhatIfModificationRequest[] }
+ *   • Creates 1:1 synthetic motor rows — no decomposition
+ *   • IGNORES: amortization, floor/cap, mixed rates, grace periods
+ *   • Currently used by: ResultsCard "Apply to Analysis" + Calculate Impact preview
+ *
+ * V2 (with decomposer): POST /api/sessions/{id}/whatif/calculate
+ *   • Function: NOT YET IMPLEMENTED in this file (TODO: add calculateWhatIfV2)
+ *   • Payload: { additions: LoanSpec[], removals: WhatIfModificationItem[] }
+ *   • Uses decomposer (1 instrument → 1-5 motor positions)
+ *   • SUPPORTS: amortization, floor/cap, mixed rates, grace, daycount
+ *   • Currently used by: FindLimit (indirectly via /whatif/find-limit)
+ *
+ * The LoanSpec type (in types/whatif.ts) matches the backend LoanSpecItem schema.
+ * Both endpoints return WhatIfResultsResponse (same response format).
+ *
+ * TODO: Add calculateWhatIfV2() and migrate Calculate Impact + ResultsCard to V2.
+ */
 export type WhatIfModificationRequest = {
   id: string;
   type: 'add' | 'remove';

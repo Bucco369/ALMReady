@@ -1,20 +1,80 @@
 /**
  * whatif.ts – Types for the What-If modification system.
  *
- * === ROLE IN THE SYSTEM ===
- * What-If modifications represent hypothetical changes to the balance:
- * - "add": Create a synthetic position (e.g. new loan portfolio)
- * - "remove": Exclude existing positions from calculation
+ * ╔═══════════════════════════════════════════════════════════════════════╗
+ * ║                     WHAT-IF SYSTEM ARCHITECTURE                      ║
+ * ╚═══════════════════════════════════════════════════════════════════════╝
  *
- * These modifications live in WhatIfContext (frontend state only) and are
- * displayed as green/red overlays in the BalancePositionsCard.
+ * The What-If system lets users simulate hypothetical changes to the bank's
+ * balance sheet and instantly see the EVE (Economic Value of Equity) and
+ * NII (Net Interest Income) impact under multiple interest rate scenarios.
  *
- * === BACKEND INTEGRATION ===
- * When the user clicks "Apply to Analysis", ResultsCard sends the modifications
- * to POST /api/sessions/{id}/calculate/whatif. The backend converts 'add'
- * modifications to synthetic motor positions (via productTemplateId mapping)
- * and 'remove' modifications to extracted existing positions, then runs
- * EVE/NII on just the delta to compute impact values.
+ * ── DATA FLOW ─────────────────────────────────────────────────────────
+ *
+ *   User builds modifications in WhatIfWorkbench (modal dialog)
+ *        ↓
+ *   Modifications stored in WhatIfContext (React state, ephemeral)
+ *        ↓
+ *   BalancePositionsCard shows green/red delta overlays on balance tree
+ *        ↓
+ *   User clicks "Apply to Analysis" → ResultsCard sends to backend
+ *        ↓
+ *   Backend (two engines, see below) computes EVE/NII deltas
+ *        ↓
+ *   ResultsCard displays per-scenario impact values
+ *
+ * ── MODIFICATION TYPES ────────────────────────────────────────────────
+ *
+ *   type='add'         → Synthetic position (new loan, bond, deposit, etc.)
+ *   type='remove'      → Exclude existing positions by subcategory or contract ID
+ *   type='behavioural' → Override NMD/prepayment/TDRR assumptions
+ *   type='pricing'     → Repricing simulation (change rates on existing portfolio)
+ *
+ * ── BACKEND ENDPOINTS ─────────────────────────────────────────────────
+ *
+ *   OLD (legacy, basic):
+ *     POST /api/sessions/{id}/calculate/whatif
+ *     • Request: { modifications: WhatIfModificationRequest[] }
+ *     • Creates 1:1 synthetic motor rows — NO decomposition
+ *     • IGNORES: amortization, floor/cap, mixed rates, grace periods
+ *     • Used by: ResultsCard "Apply to Analysis" (pending migration)
+ *
+ *   NEW (V2, with decomposer):
+ *     POST /api/sessions/{id}/whatif/calculate
+ *     • Request: { additions: LoanSpec[], removals: WhatIfModificationItem[] }
+ *     • Uses decomposer to convert 1 instrument → 1-5 motor positions
+ *     • SUPPORTS: amortization (bullet/linear/annuity), mixed rates,
+ *       floor/cap, grace periods, daycount conventions
+ *     • Used by: FindLimitCompartment, Calculate Impact preview
+ *
+ *   PREVIEW (no calculation, shows decomposition):
+ *     POST /api/sessions/{id}/whatif/decompose
+ *     • Returns the motor positions without running EVE/NII
+ *
+ *   FIND LIMIT (binary search solver):
+ *     POST /api/sessions/{id}/whatif/find-limit
+ *     • Finds max notional/rate/maturity/spread within an EVE/NII limit
+ *
+ * ── FIELDS NOT YET SUPPORTED BY ANY BACKEND ───────────────────────────
+ *
+ *   • callDate      — Callable instrument truncation (not in decomposer)
+ *   • repricingBeta — NMD pass-through rate (behavioural, not cashflow)
+ *   • payingLeg     — IRS direction (derivatives not in decomposer)
+ *
+ *   These fields are captured in the frontend form and stored in
+ *   WhatIfModification for future backend implementation.
+ *
+ * ── PRODUCT CATALOG ───────────────────────────────────────────────────
+ *
+ *   PRODUCT_FAMILIES (10 families, grouped by asset/liability/derivative)
+ *        ↓ each has
+ *   ProductVariant[] (16 active variants, each with a templateId)
+ *        ↓ maps to
+ *   PRODUCT_TEMPLATES (16 templates with field definitions)
+ *        ↓ rendered by
+ *   shared/ProductConfigForm.tsx (CascadingDropdowns → StructuralConfig → Fields)
+ *
+ *   The same form is used by AddCatalog (Buy/Sell) and FindLimitCompartment.
  */
 
 // ── Behavioural Override types ─────────────────────────────────────────

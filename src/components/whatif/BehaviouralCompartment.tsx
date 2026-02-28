@@ -1,15 +1,39 @@
 /**
  * BehaviouralCompartment.tsx – Behavioural assumptions override for the What-If Workbench.
  *
- * LEFT panel: "Current Assumptions" — read-only summary showing what the engine
- *   currently uses as base case (from BehaviouralContext defaults).
- *   When overrides are pending, base values show a strike-through and the
- *   overridden value appears beside them in primary colour.
+ * ── WHAT ARE BEHAVIOURAL ASSUMPTIONS? ─────────────────────────────────
  *
- * RIGHT panel: "Override" — form to create behavioural overrides as WhatIfModifications.
- *   The user selects a product family (NMD / Loan Prepayments / Term Deposits),
- *   adjusts parameters, and adds the override to the pending modifications list.
- *   If an override for that family already exists, the button updates it in place.
+ *   In IRRBB/ALM, certain products don't have contractual maturities or
+ *   have optionality that depends on customer behaviour:
+ *
+ *   • NMD (Non-Maturing Deposits): No contractual maturity. The bank models
+ *     a "core" proportion with an average maturity and a pass-through rate.
+ *     - coreProportion: % of deposits considered stable (e.g. 70%)
+ *     - coreAverageMaturity: Weighted avg maturity of core (e.g. 5 years)
+ *     - passThrough: How much of rate changes pass to depositors (e.g. 30%)
+ *
+ *   • Loan Prepayments: Borrowers may repay early. Modelled via:
+ *     - SMM (Single Monthly Mortality): Monthly prepayment rate (e.g. 2%)
+ *
+ *   • Term Deposits: Early redemption modelled via:
+ *     - TDRR (Term Deposit Redemption Rate): Monthly early redemption (e.g. 1%)
+ *
+ * ── LAYOUT ────────────────────────────────────────────────────────────
+ *
+ *   LEFT panel: "Current Assumptions" — read-only summary showing what the engine
+ *     currently uses as base case (from BehaviouralContext defaults).
+ *     When overrides are pending, base values show a strike-through and the
+ *     overridden value appears beside them in primary colour.
+ *
+ *   RIGHT panel: "Override" — form to create behavioural overrides as WhatIfModifications.
+ *     The user selects a product family (NMD / Loan Prepayments / Term Deposits),
+ *     adjusts parameters, and adds the override to the pending modifications list.
+ *     If an override for that family already exists, the button updates it in place.
+ *
+ * ── MODIFICATION FORMAT ───────────────────────────────────────────────
+ *
+ *   Creates modifications with type='behavioural' and a behaviouralOverride
+ *   object containing the adjusted parameters. One modification per family.
  */
 import React, { useState, useMemo, useEffect } from 'react';
 import {

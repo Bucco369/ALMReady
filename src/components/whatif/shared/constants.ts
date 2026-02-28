@@ -3,6 +3,39 @@
  *
  * Used by both AddCatalog (Buy/Sell tab) and FindLimitCompartment (Find Limit tab).
  * Any change here automatically propagates to both consumers.
+ *
+ * ── KEY EXPORTS ───────────────────────────────────────────────────────
+ *
+ *   TEMPLATE_SUBCATEGORY_MAP:
+ *     Maps each productTemplate.id → balance tree subcategory.
+ *     Used for placing synthetic positions in the correct balance tree bucket
+ *     (e.g. 'fixed-loan' → 'loans', 'nmd' → 'deposits').
+ *     MUST stay in sync with balanceSchema.ts subcategory IDs.
+ *
+ *   buildModificationFromForm():
+ *     Converts form state → WhatIfModification object (Omit<..., 'id'>).
+ *     Handles rate conversion (% → decimal), maturity calculation,
+ *     floor/cap extraction, callable logic, and mixed-rate years.
+ *     Stores raw formValues for lossless edit round-trips.
+ *
+ *   resolveModificationSelections():
+ *     Reverse-lookup: productTemplateId → { side, familyId, variantId }.
+ *     Used by edit mode to pre-fill the cascading dropdowns when the user
+ *     clicks "edit" on an existing modification badge.
+ *
+ *   shouldShowTemplateFields():
+ *     Gate for showing the template-specific form fields (Row 3).
+ *     Requires Row 2 to be complete: currency + daycount + grace (for loans).
+ *     Derivatives skip daycount/grace — only need currency selected.
+ *
+ * ── FIELD EXTRACTION RULES ────────────────────────────────────────────
+ *
+ *   Rate:     coupon || depositRate || fixedRate || wac → ÷100 to decimal
+ *   Floor:    hasFloor==='Yes' && floorRate → ÷100 to decimal
+ *   Cap:      hasCap==='Yes' && capRate → ÷100 to decimal
+ *   CallDate: callDate present && isCallable!=='No' (handles templates
+ *             where callDate is always required without an isCallable toggle)
+ *   Maturity: avgLife (years) || (maturityDate - startDate) in years
  */
 
 import {

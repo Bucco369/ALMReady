@@ -1,24 +1,37 @@
 /**
  * WhatIfContext.tsx – Global state for the What-If modification system.
  *
- * === ROLE IN THE SYSTEM ===
- * Manages a list of hypothetical balance modifications (adds/removes) that
- * the user builds through the WhatIfBuilder side-sheet. The state is consumed by:
- * - BalancePositionsCard: Shows green/red delta overlays on the balance tree.
- * - ResultsCard: Shows What-If impact columns (currently HARDCODED mock values).
- * - EVEChart: Adjusts visualization bars based on What-If asset/liability deltas.
+ * ── ROLE IN THE SYSTEM ────────────────────────────────────────────────
  *
- * === STATE ===
- * - modifications[]: Array of WhatIfModification (add/remove entries)
- * - isApplied: Whether the user clicked "Apply to Analysis"
- * - analysisDate: Optional date for calendar label display in charts
- * - cet1Capital: CET1 capital amount for %CET1 calculations in ResultsCard
+ *   Central store for all hypothetical balance modifications. Consumed by:
  *
- * === BACKEND INTEGRATION ===
- * When isApplied becomes true, ResultsCard sends the modifications array
- * to POST /api/sessions/{id}/calculate/whatif. The backend runs EVE/NII
- * only on the delta positions and returns 4 impact values.
- * Modifications exist in React state and are lost on page refresh.
+ *   • WhatIfWorkbench: Reads/writes modifications (add/remove/edit/clear)
+ *   • BalancePositionsCard: Shows green/red delta overlays on the balance tree
+ *   • ResultsCard: Sends modifications to backend for EVE/NII calculation
+ *   • EVEChart: Adjusts visualization bars based on What-If deltas
+ *
+ * ── STATE ─────────────────────────────────────────────────────────────
+ *
+ *   modifications[]:  Array of WhatIfModification (add/remove/behavioural/pricing)
+ *   isApplied:        Whether the user clicked "Apply to Analysis"
+ *   applyCounter:     Monotonic counter — increments only on explicit Apply clicks.
+ *                     ResultsCard watches this (not isApplied) to trigger calculation.
+ *   analysisDate:     Date for chart calendar labels
+ *   cet1Capital:      CET1 capital amount for %CET1 calculations
+ *
+ * ── LIFECYCLE ─────────────────────────────────────────────────────────
+ *
+ *   1. User adds modifications → isApplied becomes false (stale results)
+ *   2. User clicks "Apply to Analysis" → isApplied=true, applyCounter++
+ *   3. ResultsCard detects applyCounter change → sends to backend
+ *   4. User edits/removes a modification → isApplied goes back to false
+ *   5. Modifications are ephemeral (React state only, lost on refresh)
+ *
+ * ── NOTES ─────────────────────────────────────────────────────────────
+ *
+ *   • Scenarios are NOT stored here — they live in Index.tsx and are
+ *     threaded as props to components that need them.
+ *   • Each modification gets a unique ID: `${type}-${timestamp}-${random}`
  */
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';

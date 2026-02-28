@@ -1,15 +1,42 @@
 /**
  * PricingCompartment.tsx – Commercial rate repricing & NII margin simulation.
  *
- * LEFT panel: "Portfolio Snapshot" — read-only summary of products, volumes,
- *   average rates, annual interest, NII, and NIM. When repricing overrides are
- *   pending, affected rows show strike-through + override values, and a combined
- *   impact summary card appears at the bottom.
+ * ── WHAT IS REPRICING SIMULATION? ─────────────────────────────────────
  *
- * RIGHT panel: "Repricing Simulation" — form to select a product subcategory,
- *   choose scope (entire book vs new production %), set a new rate or delta bps,
- *   see instant impact preview, sensitivity table, and NII impact chart.
- *   Submit adds a WhatIfModification type='pricing' to the pending list.
+ *   Banks periodically reprice their products (change interest rates on
+ *   existing or new production). This compartment lets the user simulate
+ *   how a rate change on a specific product subcategory affects NII.
+ *
+ *   Example: "What if we increase the mortgage rate from 2.5% to 3.0%
+ *   on 30% of new production?"
+ *
+ *   This is purely a commercial pricing decision — different from the
+ *   market rate scenarios in Curves & Scenarios (which model exogenous
+ *   interest rate shocks for regulatory IRRBB).
+ *
+ * ── LAYOUT ────────────────────────────────────────────────────────────
+ *
+ *   LEFT panel: "Portfolio Snapshot" — read-only summary of products, volumes,
+ *     average rates, annual interest, NII, and NIM. When repricing overrides are
+ *     pending, affected rows show strike-through + override values, and a combined
+ *     impact summary card appears at the bottom.
+ *
+ *   RIGHT panel: "Repricing Simulation" — form to select a product subcategory,
+ *     choose scope (entire book vs new production %), set a new rate or delta bps,
+ *     see instant impact preview, sensitivity table, and NII impact chart.
+ *     Submit adds a WhatIfModification type='pricing' to the pending list.
+ *
+ * ── MODIFICATION FORMAT ───────────────────────────────────────────────
+ *
+ *   Creates modifications with type='pricing' and a repricingOverride object:
+ *     • subcategoryId: Which product (e.g. 'mortgages', 'deposits')
+ *     • side: 'asset' or 'liability'
+ *     • scope: 'entire' (full book) or 'new-production' (only a %)
+ *     • newProductionPct: % of new production affected (0-100)
+ *     • newRate: The new interest rate (decimal)
+ *     • currentVolume/currentAvgRate: Snapshot for impact calculation
+ *
+ *   Requires balanceTree prop to read current portfolio volumes and rates.
  */
 import React, { useState, useMemo, useCallback } from 'react';
 import {

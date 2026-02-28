@@ -2,11 +2,43 @@
  * FindLimitCompartment.tsx – Find the maximum amount of a product
  * to buy/sell while staying within an EVE/NII limit.
  *
- * LEFT panel: Constraint definition (metric, scenario, limit, solve_for) + result display.
- * RIGHT panel: Product configuration (shared form, same as Add).
+ * ── LAYOUT ────────────────────────────────────────────────────────────
  *
- * The product form is IDENTICAL to AddCatalog because both consume the shared
- * components from shared/ProductConfigForm.tsx. Any change there propagates here.
+ *   ┌──────────────────────┬──────────────────────┐
+ *   │   Constraint Setup   │  Product Config      │
+ *   ├──────────────────────┼──────────────────────┤
+ *   │ • Metric (EVE/NII)   │ • Same form as       │
+ *   │ • Scenario (base/    │   AddCatalog          │
+ *   │   worst/specific)    │   (shared components  │
+ *   │ • Limit value        │    from ProductConfig │
+ *   │ • Solve for          │    Form.tsx)           │
+ *   │   (notional/rate/    │ • Cascading dropdowns │
+ *   │    maturity/spread)  │ • Structural config   │
+ *   │ • [Find Limit]       │ • Template fields     │
+ *   │ • Result display     │                       │
+ *   │ • [Add to Mods]      │                       │
+ *   └──────────────────────┴──────────────────────┘
+ *
+ * ── BACKEND ───────────────────────────────────────────────────────────
+ *
+ *   Calls POST /api/sessions/{id}/whatif/find-limit (V2 endpoint).
+ *   The backend uses binary search (or linear scaling for notional) to
+ *   find the maximum value of the solve_for variable such that the
+ *   target metric stays within the limit.
+ *
+ *   Request payload uses LoanSpec format (same as V2 decomposer), so it
+ *   fully supports: amortization, mixed rates, floor/cap, grace periods.
+ *
+ *   buildProductSpec() converts form state → LoanSpec API payload.
+ *   This is a local function — TODO: move to shared/constants.ts and
+ *   reuse in BuySellCompartment's Calculate Impact handler.
+ *
+ * ── RESULT FLOW ───────────────────────────────────────────────────────
+ *
+ *   1. User fills product form + constraint definition
+ *   2. "Find Limit" button calls findLimit(sessionId, request)
+ *   3. Response includes found_value + achieved_metric
+ *   4. "Add to Modifications" creates a modification with the solved value
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
