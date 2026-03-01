@@ -20,7 +20,7 @@
  *
  * ── COMPARTMENTS ──────────────────────────────────────────────────────
  *
- *   1. Add/Remove (BuySellCompartment):
+ *   1. Add/Remove (AddRemoveCompartment):
  *      - LEFT: Remove positions from existing balance (tree accordion + contract search)
  *      - RIGHT: Add synthetic positions (product catalog → form → "Add to Modifications")
  *      - Includes "Calculate Impact" preview button (calls V1 endpoint currently)
@@ -77,7 +77,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useWhatIf } from './WhatIfContext';
-import { BuySellCompartment } from './BuySellCompartment';
+import { AddRemoveCompartment } from './AddRemoveCompartment';
 import { BehaviouralCompartment } from './BehaviouralCompartment';
 import { FindLimitCompartment } from './FindLimitCompartment';
 import { PricingCompartment } from './PricingCompartment';
@@ -268,7 +268,7 @@ export function WhatIfWorkbench({
           {/* ── Compartment Content Area ───────────────────────── */}
           <div className="flex-1 min-h-0 relative">
             <div className={cn('absolute inset-0', activeCompartment !== 'buy-sell' && 'hidden')}>
-              <BuySellCompartment
+              <AddRemoveCompartment
                 sessionId={sessionId ?? null}
                 balanceTree={balanceTree ?? null}
                 editingModification={editingModification}

@@ -1,5 +1,5 @@
 /**
- * BuySellCompartment.tsx – Add + Remove positions for the What-If Workbench.
+ * AddRemoveCompartment.tsx – Add + Remove positions for the What-If Workbench.
  *
  * ── LAYOUT ────────────────────────────────────────────────────────────
  *
@@ -138,7 +138,7 @@ function getErrorMessage(error: unknown): string {
 
 // ── Props ───────────────────────────────────────────────────────────────
 
-interface BuySellCompartmentProps {
+interface AddRemoveCompartmentProps {
   sessionId: string | null;
   balanceTree: BalanceUiTree | null;
   editingModification?: WhatIfModification | null;
@@ -150,13 +150,13 @@ interface BuySellCompartmentProps {
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function BuySellCompartment({
+export function AddRemoveCompartment({
   sessionId,
   balanceTree,
   editingModification,
   onEditComplete,
   scenarios,
-}: BuySellCompartmentProps) {
+}: AddRemoveCompartmentProps) {
   const isEditing = !!editingModification;
 
   return (

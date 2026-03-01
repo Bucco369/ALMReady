@@ -5,7 +5,7 @@
  *
  *   The single source of truth for product selection UI. Used by:
  *
- *   • AddCatalog (BuySellCompartment) — full form, all fields editable
+ *   • AddCatalog (AddRemoveCompartment) — full form, all fields editable
  *   • FindLimitCompartment            — same form, but "solve-for" field
  *                                       is excluded (shown as "Solved by
  *                                       Find Limit" placeholder)

@@ -31,7 +31,7 @@
  *
  *   buildProductSpec() converts form state → LoanSpec API payload.
  *   This is a local function — TODO: move to shared/constants.ts and
- *   reuse in BuySellCompartment's Calculate Impact handler.
+ *   reuse in AddRemoveCompartment's Calculate Impact handler.
  *
  * ── RESULT FLOW ───────────────────────────────────────────────────────
  *
