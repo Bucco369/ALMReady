@@ -589,6 +589,52 @@ export async function calculateWhatIf(
   );
 }
 
+// ── What-If V2 (with decomposer) ────────────────────────────────────────────
+
+export type LoanSpecPayload = {
+  id: string;
+  notional: number;
+  term_years: number;
+  side?: string;
+  currency?: string;
+  rate_type?: string;
+  fixed_rate?: number | null;
+  variable_index?: string | null;
+  spread_bps?: number;
+  mixed_fixed_years?: number | null;
+  paying_leg?: string | null;
+  amortization?: string;
+  grace_years?: number;
+  schedule?: null;
+  daycount?: string;
+  payment_freq?: string;
+  repricing_freq?: string | null;
+  start_date?: string | null;
+  call_date?: string | null;
+  floor_rate?: number | null;
+  cap_rate?: number | null;
+  label?: string;
+};
+
+export type WhatIfV2CalculateRequestBody = {
+  additions: LoanSpecPayload[];
+  removals: WhatIfModificationRequest[];
+};
+
+export async function calculateWhatIfV2(
+  sessionId: string,
+  request: WhatIfV2CalculateRequestBody,
+): Promise<WhatIfResultsResponse> {
+  return http<WhatIfResultsResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/whatif/calculate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }
+  );
+}
+
 // ── What-If V2: Decompose + Find Limit ──────────────────────────────────────
 
 import type {

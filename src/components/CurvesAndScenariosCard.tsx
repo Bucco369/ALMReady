@@ -36,6 +36,7 @@ import {
   Upload,
   RotateCcw,
   AlertCircle,
+  Pencil,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -58,6 +59,7 @@ import { buildScenarioPoints } from '@/lib/curves/scenarios';
 import { getCurveDisplayLabel, getCurveTooltipLabel } from '@/lib/curves/labels';
 import { getTenorCalendarDateLabel } from '@/lib/calendarLabels';
 import { toast } from 'sonner';
+import { CurveTorsionEditor } from '@/components/CurveTorsionEditor';
 import {
   LineChart,
   Line,
@@ -130,6 +132,7 @@ const SCENARIO_COLORS: Record<string, string> = {
   'long-up': 'hsl(25, 70%, 46%)',
   'long-down': 'hsl(200, 52%, 45%)',
   custom: 'hsl(25, 80%, 50%)',
+  torsion: 'hsl(45, 80%, 50%)',
   base: 'hsl(215, 50%, 45%)',
 };
 
@@ -291,6 +294,9 @@ function formatMaturityLabel(years: number): string {
 }
 
 function getScenarioColor(scenarioId: string, shockBps?: number): string {
+  if (scenarioId.startsWith('custom-torsion-')) {
+    return SCENARIO_COLORS.torsion;
+  }
   if (scenarioId.startsWith('custom-long-')) {
     return (shockBps ?? 0) >= 0
       ? SCENARIO_COLORS['long-up']
@@ -342,8 +348,10 @@ export function CurvesAndScenariosCard({
   const [maxMaturityYears, setMaxMaturityYears] = useState<number>(DEFAULT_CHART_MATURITY_YEARS);
 
   const [showCustomInput, setShowCustomInput] = useState(false);
-  const [customShockType, setCustomShockType] = useState<'parallel' | 'long'>('parallel');
+  const [customShockType, setCustomShockType] = useState<'parallel' | 'long' | 'torsion'>('parallel');
   const [customBps, setCustomBps] = useState('');
+  const [showTorsionEditor, setShowTorsionEditor] = useState(false);
+  const [editingTorsionId, setEditingTorsionId] = useState<string | null>(null);
 
   const [showUploadDropzone, setShowUploadDropzone] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -581,6 +589,60 @@ export function CurvesAndScenariosCard({
     [onScenariosChange, scenarios]
   );
 
+  const handleCreateTorsionScenario = useCallback(
+    (name: string, shocks: Record<string, number>) => {
+      const absValues = Object.values(shocks).map(Math.abs);
+      const maxShock = absValues.length > 0 ? Math.max(...absValues) : 0;
+
+      if (editingTorsionId) {
+        // Update existing scenario in-place
+        onScenariosChange(
+          scenarios.map((s) =>
+            s.id === editingTorsionId
+              ? { ...s, name, shockBps: maxShock, customShocks: shocks }
+              : s
+          )
+        );
+      } else {
+        // Create new scenario
+        const newScenario: Scenario = {
+          id: `custom-torsion-${Date.now()}`,
+          name,
+          description: 'Custom curve torsion scenario',
+          shockBps: maxShock,
+          enabled: true,
+          customShocks: shocks,
+        };
+        onScenariosChange([...scenarios, newScenario]);
+      }
+      setEditingTorsionId(null);
+      setShowTorsionEditor(false);
+    },
+    [editingTorsionId, onScenariosChange, scenarios]
+  );
+
+  const handleOpenTorsionEditor = useCallback(() => {
+    const curveId = baseCurveIdForScenarios || defaultCurveId;
+    if (curveId) {
+      void ensureCurvePoints(curveId);
+    }
+    setEditingTorsionId(null);
+    setShowCustomInput(false);
+    setShowTorsionEditor(true);
+  }, [baseCurveIdForScenarios, defaultCurveId, ensureCurvePoints]);
+
+  const handleEditTorsionScenario = useCallback(
+    (scenarioId: string) => {
+      const curveId = baseCurveIdForScenarios || defaultCurveId;
+      if (curveId) {
+        void ensureCurvePoints(curveId);
+      }
+      setEditingTorsionId(scenarioId);
+      setShowTorsionEditor(true);
+    },
+    [baseCurveIdForScenarios, defaultCurveId, ensureCurvePoints]
+  );
+
   const handleUploadFile = useCallback(
     async (file: File) => {
       if (!isExcelFile(file) || !sessionId) return;
@@ -748,21 +810,21 @@ export function CurvesAndScenariosCard({
 
         chartScenarios.forEach((scenarioId) => {
           const scenario = scenarioById.get(scenarioId);
+          const isTorsion = scenarioId.startsWith('custom-torsion-');
           const customType = scenarioId.startsWith('custom-long-')
             ? 'long'
             : scenarioId.startsWith('custom-parallel-')
               ? 'parallel'
               : undefined;
-          const shockedPoints = buildScenarioPoints(
-            basePoints,
-            scenarioId,
-            scenario?.shockBps,
-            customType
-          );
+          const shockedPoints = isTorsion
+            ? buildScenarioPoints(basePoints, scenarioId, undefined, undefined, scenario?.customShocks)
+            : buildScenarioPoints(basePoints, scenarioId, scenario?.shockBps, customType);
           const shock = scenario?.shockBps;
-          const shockLabel = shock === undefined
-            ? ''
-            : ` (${shock > 0 ? '+' : ''}${shock}bp)`;
+          const shockLabel = isTorsion
+            ? ` (±${shock ?? 0}bp max)`
+            : shock === undefined
+              ? ''
+              : ` (${shock > 0 ? '+' : ''}${shock}bp)`;
           const isCustomScenario = scenarioId.startsWith('custom-');
           const color = getScenarioColor(scenarioId, shock);
 
@@ -772,7 +834,7 @@ export function CurvesAndScenariosCard({
             label: `${getScenarioLabel(scenarioId)}${shockLabel}`,
             color,
             strokeWidth: 1.6,
-            dash: isCustomScenario ? '3 3' : '5 5',
+            dash: isTorsion ? '2 4' : isCustomScenario ? '3 3' : '5 5',
           });
 
           shockedPoints.forEach((point) => upsertPoint(scenarioSeriesKey, point));
@@ -1083,12 +1145,12 @@ export function CurvesAndScenariosCard({
                       Custom
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-48 p-2" align="end">
+                  <PopoverContent className="w-52 p-2" align="end">
                     <div className="space-y-2">
                       <div className="text-xs font-medium text-foreground">Add Custom Scenario</div>
                       <div className="space-y-1">
                         <div className="text-[10px] text-muted-foreground">Shock type</div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
                             type="button"
                             onClick={() => setCustomShockType('parallel')}
@@ -1117,30 +1179,67 @@ export function CurvesAndScenariosCard({
                             />
                             Long
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setCustomShockType('torsion')}
+                            className="inline-flex items-center gap-1 text-[10px] text-foreground"
+                          >
+                            <span
+                              className={`h-2.5 w-2.5 rounded-full border ${
+                                customShockType === 'torsion'
+                                  ? 'bg-primary border-primary'
+                                  : 'bg-background border-muted-foreground/40'
+                              }`}
+                            />
+                            Curve Torsion
+                          </button>
                         </div>
                       </div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {customShockType === 'long'
-                          ? 'Long-end shock magnitude (basis points)'
-                          : 'Parallel shock (basis points)'}
-                      </div>
-                      <div className="flex gap-1.5">
-                        <Input
-                          type="number"
-                          placeholder="e.g. +150 or -100"
-                          value={customBps}
-                          onChange={(event) => setCustomBps(event.target.value)}
-                          className="h-7 text-xs"
-                        />
-                        <Button
-                          size="sm"
-                          onClick={handleAddCustomScenario}
-                          disabled={!customBps || Number.isNaN(Number.parseInt(customBps, 10))}
-                          className="h-7 px-2 text-xs"
-                        >
-                          Add
-                        </Button>
-                      </div>
+                      {customShockType === 'torsion' ? (
+                        <>
+                          <div className="text-[10px] text-muted-foreground">
+                            Define per-tenor shocks visually
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={handleOpenTorsionEditor}
+                            disabled={!curvesLoaded}
+                            className="w-full h-7 text-xs"
+                          >
+                            Open editor
+                          </Button>
+                          {!curvesLoaded && (
+                            <div className="text-[9px] text-muted-foreground italic">
+                              Upload curves first
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[10px] text-muted-foreground">
+                            {customShockType === 'long'
+                              ? 'Long-end shock magnitude (basis points)'
+                              : 'Parallel shock (basis points)'}
+                          </div>
+                          <div className="flex gap-1.5">
+                            <Input
+                              type="number"
+                              placeholder="e.g. +150 or -100"
+                              value={customBps}
+                              onChange={(event) => setCustomBps(event.target.value)}
+                              className="h-7 text-xs"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={handleAddCustomScenario}
+                              disabled={!customBps || Number.isNaN(Number.parseInt(customBps, 10))}
+                              className="h-7 px-2 text-xs"
+                            >
+                              Add
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </PopoverContent>
                 </Popover>
@@ -1164,21 +1263,40 @@ export function CurvesAndScenariosCard({
                           {scenario.name}
                         </span>
                         <span
-                          className={`shrink-0 text-[9px] font-medium ${scenario.shockBps > 0 ? 'text-destructive' : 'text-success'}`}
+                          className={`shrink-0 text-[9px] font-medium ${
+                            scenario.id.startsWith('custom-torsion-')
+                              ? 'text-amber-600'
+                              : scenario.shockBps > 0 ? 'text-destructive' : 'text-success'
+                          }`}
                         >
-                          {scenario.shockBps > 0 ? '+' : ''}
-                          {scenario.shockBps}bp
+                          {scenario.id.startsWith('custom-torsion-')
+                            ? `±${scenario.shockBps}bp`
+                            : `${scenario.shockBps > 0 ? '+' : ''}${scenario.shockBps}bp`}
                         </span>
                         {isCustom ? (
-                          <button
-                            onClick={(event) => {
-                              event.preventDefault();
-                              handleRemoveCustomScenario(scenario.id);
-                            }}
-                            className="shrink-0 ml-auto text-muted-foreground hover:text-destructive transition-colors"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
+                          <span className="shrink-0 ml-auto flex items-center gap-0.5">
+                            {scenario.id.startsWith('custom-torsion-') && (
+                              <button
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  handleEditTorsionScenario(scenario.id);
+                                }}
+                                className="text-muted-foreground hover:text-primary transition-colors p-0.5"
+                                title="Edit torsion scenario"
+                              >
+                                <Pencil className="h-2.5 w-2.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={(event) => {
+                                event.preventDefault();
+                                handleRemoveCustomScenario(scenario.id);
+                              }}
+                              className="text-muted-foreground hover:text-destructive transition-colors p-0.5"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
                         ) : null}
                       </label>
                     );
@@ -1445,6 +1563,20 @@ export function CurvesAndScenariosCard({
           </div>
         </DialogContent>
       </Dialog>
+
+      <CurveTorsionEditor
+        open={showTorsionEditor}
+        onOpenChange={(open) => {
+          setShowTorsionEditor(open);
+          if (!open) setEditingTorsionId(null);
+        }}
+        basePoints={curvePointsById[baseCurveIdForScenarios || defaultCurveId] ?? []}
+        baseCurveLabel={getCurveDisplayLabel(baseCurveIdForScenarios || defaultCurveId)}
+        onCreateScenario={handleCreateTorsionScenario}
+        editMode={!!editingTorsionId}
+        initialShocks={editingTorsionId ? scenarioById.get(editingTorsionId)?.customShocks : undefined}
+        initialName={editingTorsionId ? scenarioById.get(editingTorsionId)?.name : undefined}
+      />
     </>
   );
 }

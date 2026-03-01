@@ -27,8 +27,9 @@ import type { CalculationResults, Scenario } from '@/types/financial';
 import { EVEChart } from '@/components/results/EVEChart';
 import { NIIChart } from '@/components/results/NIIChart';
 import { useWhatIf } from '@/components/whatif/WhatIfContext';
-import { calculateWhatIf, getChartData } from '@/lib/api';
-import type { WhatIfModificationRequest, ChartBucketRow, ChartNiiMonthRow } from '@/lib/api';
+import { calculateWhatIfV2, getChartData } from '@/lib/api';
+import type { LoanSpecPayload, WhatIfModificationRequest, ChartBucketRow, ChartNiiMonthRow } from '@/lib/api';
+import { modificationToLoanSpec } from '@/components/whatif/shared/constants';
 import {
   Popover,
   PopoverContent,
@@ -157,34 +158,39 @@ export function ResultsCard({
     let cancelled = false;
     let tid: ReturnType<typeof setTimeout>;
 
-    // V1 backend only handles 'add' and 'remove' types
-    const v1Mods = currentMods.filter((m) => m.type === 'add' || m.type === 'remove');
-    const modsPayload: WhatIfModificationRequest[] = v1Mods.map((m) => ({
-      id: m.id,
-      type: m.type,
-      label: m.label,
-      notional: m.notional,
-      currency: m.currency,
-      category: m.category,
-      subcategory: m.subcategory,
-      rate: m.rate,
-      maturity: m.maturity,
-      removeMode: m.removeMode,
-      contractIds: m.contractIds,
-      productTemplateId: m.productTemplateId,
-      startDate: m.startDate,
-      maturityDate: m.maturityDate,
-      paymentFreq: m.paymentFreq,
-      repricingFreq: m.repricingFreq,
-      refIndex: m.refIndex,
-      spread: m.spread,
-      // V2 enrichment fields
-      amortization: m.amortization,
-      floorRate: m.floorRate,
-      capRate: m.capRate,
-    }));
+    // V2: split modifications into additions (LoanSpec) and removals
+    const additions: LoanSpecPayload[] = [];
+    const removals: WhatIfModificationRequest[] = [];
 
-    calculateWhatIf(sessionId, { modifications: modsPayload })
+    for (const m of currentMods) {
+      if (m.type === 'add') {
+        const spec = modificationToLoanSpec(m);
+        if (spec) additions.push(spec);
+      } else if (m.type === 'remove') {
+        removals.push({
+          id: m.id,
+          type: m.type,
+          label: m.label,
+          notional: m.notional,
+          currency: m.currency,
+          category: m.category,
+          subcategory: m.subcategory,
+          rate: m.rate,
+          maturity: m.maturity,
+          removeMode: m.removeMode,
+          contractIds: m.contractIds,
+          productTemplateId: m.productTemplateId,
+          startDate: m.startDate,
+          maturityDate: m.maturityDate,
+          paymentFreq: m.paymentFreq,
+          repricingFreq: m.repricingFreq,
+          refIndex: m.refIndex,
+          spread: m.spread,
+        });
+      }
+    }
+
+    calculateWhatIfV2(sessionId, { additions, removals })
       .then((resp) => {
         if (cancelled || requestId !== whatIfRequestIdRef.current) return;
         const elapsed = Date.now() - startTime;

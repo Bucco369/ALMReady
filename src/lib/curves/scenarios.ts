@@ -95,8 +95,18 @@ export function buildScenarioPoints(
   basePoints: CurvePoint[],
   scenarioId: string,
   customShockBps?: number,
-  customShockType?: "parallel" | "long"
+  customShockType?: "parallel" | "long",
+  customShocks?: Record<string, number>,
 ): CurvePoint[] {
+  // Per-tenor shocks (torsion scenarios): apply each tenor's shock independently
+  if (customShocks) {
+    return basePoints.map((point) => ({
+      tenor: point.tenor,
+      t_years: point.t_years,
+      rate: point.rate + (customShocks[point.tenor] ?? 0) / 10000,
+    }));
+  }
+
   return basePoints.map((point) => ({
     tenor: point.tenor,
     t_years: point.t_years,

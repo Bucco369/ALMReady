@@ -44,6 +44,7 @@ import {
   type ProductTemplate,
   type WhatIfModification,
 } from '@/types/whatif';
+import type { LoanSpecPayload } from '@/lib/api';
 
 // ── Template → subcategory mapping ───────────────────────────────────────
 
@@ -65,6 +66,138 @@ export const TEMPLATE_SUBCATEGORY_MAP: Record<string, string> = {
   'irs-hedge': 'loans',
   'securitised': 'mortgages',
 };
+
+// ── Template → backend rate_type mapping ─────────────────────────────────
+
+export const TEMPLATE_RATE_TYPE_MAP: Record<string, string> = {
+  'fixed-loan': 'fixed',
+  'bond-portfolio': 'fixed',
+  'term-deposit': 'fixed',
+  'wholesale-fixed': 'fixed',
+  'covered-bond': 'fixed',
+  'subordinated': 'fixed',
+  'securitised': 'fixed',
+  'floating-loan': 'variable',
+  'bond-frn': 'variable',
+  'wholesale-floating': 'variable',
+  'covered-bond-floating': 'variable',
+  'subordinated-floating': 'variable',
+  'mixed-loan': 'mixed',
+  'subordinated-fix2float': 'mixed',
+  'irs-hedge': 'irs',
+  'nmd': 'fixed',
+};
+
+/** Maps display label → backend frequency code. */
+const FREQ_MAP: Record<string, string> = {
+  'Monthly': '1M',
+  'Quarterly': '3M',
+  'Semi-Annual': '6M',
+  'Annual': '12M',
+  'At Maturity': '12M',
+};
+
+/** Maps display label → backend reference index name. */
+const REF_INDEX_MAP: Record<string, string> = {
+  'EURIBOR 3M': 'EUR_EURIBOR_3M',
+  'EURIBOR 6M': 'EUR_EURIBOR_6M',
+  'EURIBOR 12M': 'EUR_EURIBOR_12M',
+  '€STR': 'EUR_ESTR_OIS',
+  'SOFR': 'USD_SOFR',
+  'SONIA': 'GBP_SONIA',
+};
+
+/**
+ * Convert a WhatIfModification (frontend format) to a backend LoanSpecPayload
+ * (snake_case, ready for the V2 /whatif/calculate endpoint).
+ *
+ * Returns null for modifications that can't be converted (e.g. non-add type
+ * or missing product template).
+ */
+export function modificationToLoanSpec(
+  mod: WhatIfModification,
+): LoanSpecPayload | null {
+  if (mod.type !== 'add' || !mod.productTemplateId) return null;
+
+  const fv = mod.formValues || {};
+  const rateType = TEMPLATE_RATE_TYPE_MAP[mod.productTemplateId] || 'fixed';
+
+  // Side: asset→A, liability→L, derivative→A (IRS sides handled by paying_leg)
+  const side = mod.category === 'liability' ? 'L' : 'A';
+
+  // Term years: from maturity field or compute from dates
+  let termYears = mod.maturity || 0;
+  if (!termYears && mod.startDate && mod.maturityDate) {
+    const start = new Date(mod.startDate);
+    const mat = new Date(mod.maturityDate);
+    termYears = (mat.getTime() - start.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+  }
+  // NMD fallback: use avgLife
+  if (!termYears && fv.avgLife) {
+    termYears = parseFloat(fv.avgLife) || 5.0;
+  }
+  if (!termYears) termYears = 5.0;
+
+  // Fixed rate: already decimal in mod.rate
+  const fixedRate = mod.rate ?? null;
+
+  // Variable index: convert display label → backend name
+  let variableIndex: string | null = null;
+  if (mod.refIndex) {
+    variableIndex = REF_INDEX_MAP[mod.refIndex]
+      || `EUR_${mod.refIndex.replace(/\s+/g, '_').toUpperCase()}`;
+  }
+
+  // Spread: mod.spread is already in bps
+  const spreadBps = mod.spread || 0;
+
+  // Frequencies: convert display label → code
+  const paymentFreq = mod.paymentFreq ? (FREQ_MAP[mod.paymentFreq] || '12M') : '12M';
+  const repricingFreq = mod.repricingFreq ? (FREQ_MAP[mod.repricingFreq] || null) : null;
+
+  // Grace: from formValues (not stored at top level)
+  const graceYears = fv.gracePeriod === 'yes' && fv.graceYears
+    ? parseFloat(fv.graceYears) : 0;
+
+  // Daycount: from formValues (not stored at top level)
+  const daycount = fv.daycount || '30/360';
+
+  // Paying leg: convert "Fixed"→"fixed", "Floating"→"floating"
+  const payingLeg = mod.payingLeg ? mod.payingLeg.toLowerCase() : null;
+
+  // Mixed fixed years: for subordinated-fix2float, compute from start→callDate
+  let mixedFixedYears = mod.mixedFixedYears ?? null;
+  if (rateType === 'mixed' && !mixedFixedYears && mod.startDate && mod.callDate) {
+    const start = new Date(mod.startDate);
+    const call = new Date(mod.callDate);
+    mixedFixedYears = (call.getTime() - start.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+  }
+
+  return {
+    id: mod.id,
+    notional: mod.notional || 0,
+    term_years: Math.max(0.25, termYears),
+    side,
+    currency: mod.currency || 'EUR',
+    rate_type: rateType,
+    fixed_rate: fixedRate,
+    variable_index: variableIndex,
+    spread_bps: spreadBps,
+    mixed_fixed_years: mixedFixedYears,
+    paying_leg: payingLeg,
+    amortization: mod.amortization || 'bullet',
+    grace_years: graceYears,
+    schedule: null,
+    daycount,
+    payment_freq: paymentFreq,
+    repricing_freq: repricingFreq,
+    start_date: mod.startDate || null,
+    call_date: mod.callDate || null,
+    floor_rate: mod.floorRate ?? null,
+    cap_rate: mod.capRate ?? null,
+    label: mod.label || '',
+  };
+}
 
 // ── Row 2 constants ──────────────────────────────────────────────────────
 

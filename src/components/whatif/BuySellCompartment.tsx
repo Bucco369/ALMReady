@@ -83,9 +83,9 @@ import type { Scenario } from '@/types/financial';
 import type { BalanceUiTree, BalanceSubcategoryUiRow } from '@/lib/balanceUi';
 import {
   getBalanceContracts,
-  calculateWhatIf,
+  calculateWhatIfV2,
   type BalanceContract,
-  type WhatIfModificationRequest,
+  type LoanSpecPayload,
   type WhatIfResultsResponse,
 } from '@/lib/api';
 import { useWhatIf } from './WhatIfContext';
@@ -101,6 +101,7 @@ import {
   resolveModificationSelections,
   buildModificationFromForm,
   shouldShowTemplateFields,
+  modificationToLoanSpec,
 } from './shared/constants';
 
 // ── Helpers (Remove-side only) ───────────────────────────────────────────
@@ -290,31 +291,24 @@ function AddCatalog({ editingModification, onEditComplete, sessionId, scenarios 
       state.formValues,
     );
 
-    const payload: WhatIfModificationRequest = {
-      id: 'preview',
-      type: modData.type as 'add' | 'remove',
-      label: modData.label,
-      notional: modData.notional,
-      currency: modData.currency,
-      category: modData.category,
-      subcategory: modData.subcategory,
-      rate: modData.rate,
-      maturity: modData.maturity,
-      productTemplateId: modData.productTemplateId,
-      startDate: modData.startDate,
-      maturityDate: modData.maturityDate,
-      paymentFreq: modData.paymentFreq,
-      repricingFreq: modData.repricingFreq,
-      refIndex: modData.refIndex,
-      spread: modData.spread,
-    };
+    // Build a temporary modification with a preview ID for conversion
+    const tempMod = { ...modData, id: 'preview' } as import('@/types/whatif').WhatIfModification;
+    const loanSpec = modificationToLoanSpec(tempMod);
+
+    if (!loanSpec) {
+      setImpactError('Cannot convert this product to a loan specification');
+      return;
+    }
 
     setImpactLoading(true);
     setImpactError(null);
     setImpactResult(null);
 
     try {
-      const result = await calculateWhatIf(sessionId, { modifications: [payload] });
+      const result = await calculateWhatIfV2(sessionId, {
+        additions: [loanSpec],
+        removals: [],
+      });
       setImpactResult(result);
     } catch (err) {
       setImpactError(err instanceof Error ? err.message : String(err));
@@ -435,25 +429,35 @@ function ImpactResultsPanel({
   const eveDeltas = result.scenario_eve_deltas ?? {};
   const niiDeltas = result.scenario_nii_deltas ?? {};
 
-  // Build rows from enabled scenarios (if provided) or from response keys
+  // Build rows: base row first, then enabled scenarios (or response keys)
   const rows = useMemo(() => {
+    const baseRow = {
+      name: 'Base (No Shock)',
+      eve: result.base_eve_delta,
+      nii: result.base_nii_delta,
+    };
+
+    let scenarioRows: { name: string; eve: number; nii: number }[];
     if (scenarios && scenarios.length > 0) {
-      return scenarios
+      scenarioRows = scenarios
         .filter((s) => s.enabled)
         .map((s) => ({
           name: s.name,
           eve: eveDeltas[s.id] ?? eveDeltas[s.name] ?? 0,
           nii: niiDeltas[s.id] ?? niiDeltas[s.name] ?? 0,
         }));
+    } else {
+      // Fallback: derive rows from response keys
+      const keys = new Set([...Object.keys(eveDeltas), ...Object.keys(niiDeltas)]);
+      scenarioRows = Array.from(keys).map((k) => ({
+        name: k,
+        eve: eveDeltas[k] ?? 0,
+        nii: niiDeltas[k] ?? 0,
+      }));
     }
-    // Fallback: derive rows from response keys
-    const keys = new Set([...Object.keys(eveDeltas), ...Object.keys(niiDeltas)]);
-    return Array.from(keys).map((k) => ({
-      name: k,
-      eve: eveDeltas[k] ?? 0,
-      nii: niiDeltas[k] ?? 0,
-    }));
-  }, [scenarios, eveDeltas, niiDeltas]);
+
+    return [baseRow, ...scenarioRows];
+  }, [scenarios, eveDeltas, niiDeltas, result.base_eve_delta, result.base_nii_delta]);
 
   return (
     <div className="rounded-md border border-border bg-card overflow-hidden">
