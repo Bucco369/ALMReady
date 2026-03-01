@@ -29,10 +29,10 @@
  *     → useWhatIf().addModification() stores it in context
  *
  *   "Calculate Impact" button:
- *     Calls calculateWhatIf() to preview EVE/NII deltas for the SINGLE
+ *     Calls calculateWhatIfV2() to preview EVE/NII deltas for the SINGLE
  *     position being configured, before adding it to modifications.
- *     Currently uses the OLD endpoint (V1) — pending migration to V2
- *     which supports amortization, floor/cap, mixed rates, and grace.
+ *     Uses V2 endpoint with decomposer — supports amortization, floor/cap,
+ *     mixed rates, grace, IRS, and call dates.
  *     Results displayed in ImpactResultsPanel (per-scenario table).
  *
  *   Edit mode:

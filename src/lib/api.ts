@@ -333,10 +333,6 @@ export type WhatIfModificationRequest = {
   capRate?: number;
 };
 
-export type WhatIfCalculateRequestBody = {
-  modifications: WhatIfModificationRequest[];
-};
-
 export type WhatIfBucketDelta = {
   scenario: string;
   bucket_name: string;
@@ -572,20 +568,6 @@ export async function getCalculationResults(
 ): Promise<CalculationResultsResponse> {
   return http<CalculationResultsResponse>(
     `/api/sessions/${encodeURIComponent(sessionId)}/results`
-  );
-}
-
-export async function calculateWhatIf(
-  sessionId: string,
-  request: WhatIfCalculateRequestBody,
-): Promise<WhatIfResultsResponse> {
-  return http<WhatIfResultsResponse>(
-    `/api/sessions/${encodeURIComponent(sessionId)}/calculate/whatif`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    }
   );
 }
 
