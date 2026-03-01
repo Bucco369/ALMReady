@@ -644,7 +644,7 @@ def _extend_variable_bullet_cashflows(
                     segment_points.append(d)
             segment_points = sorted(set(segment_points))
 
-            period_interest = 0.0
+            compound_factor = 1.0
             for i in range(len(segment_points) - 1):
                 seg_start = segment_points[i]
                 seg_end = segment_points[i + 1]
@@ -662,9 +662,9 @@ def _extend_variable_bullet_cashflows(
                 else:
                     seg_rate = float(projection_curve_set.rate_on_date(index_name, seg_start)) + float(spread)
                 seg_rate = apply_floor_cap(seg_rate, floor_rate=floor_rate, cap_rate=cap_rate)
-                period_interest += sign * notional * seg_rate * yearfrac(seg_start, seg_end, base)
+                compound_factor *= 1.0 + seg_rate * yearfrac(seg_start, seg_end, base)
 
-            _add_flow(flow_map, flow_date=pay_date, interest_amount=period_interest)
+            _add_flow(flow_map, flow_date=pay_date, interest_amount=sign * notional * (compound_factor - 1.0))
             period_start = pay_date
 
         _add_flow(flow_map, flow_date=maturity_date, principal_amount=sign * notional)
@@ -772,7 +772,7 @@ def _extend_variable_linear_cashflows(
                     period_points.append(d)
             period_points = sorted(set(period_points))
 
-            period_interest = 0.0
+            accrued_interest = 0.0
             for i in range(len(period_points) - 1):
                 seg_start = period_points[i]
                 seg_end = period_points[i + 1]
@@ -804,7 +804,8 @@ def _extend_variable_linear_cashflows(
                     outstanding_at_effective_start=outstanding,
                 )
                 avg_notional = 0.5 * (n_start + n_end)
-                period_interest += sign * avg_notional * seg_rate * yearfrac(seg_start, seg_end, base)
+                yf = yearfrac(seg_start, seg_end, base)
+                accrued_interest = accrued_interest * (1.0 + seg_rate * yf) + avg_notional * seg_rate * yf
 
             n_period_start = linear_notional_at(
                 prev,
@@ -823,7 +824,7 @@ def _extend_variable_linear_cashflows(
             _add_flow(
                 flow_map,
                 flow_date=pay_date,
-                interest_amount=period_interest,
+                interest_amount=sign * accrued_interest,
                 principal_amount=period_principal,
             )
             prev = pay_date
